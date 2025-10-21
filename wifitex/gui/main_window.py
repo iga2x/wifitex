@@ -224,6 +224,9 @@ class WifitexMainWindow(QMainWindow):
         self.networks_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.networks_table.setAlternatingRowColors(True)
         
+        # Disable editing - make table read-only
+        self.networks_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        
         # Set column widths to accommodate full ESSID names
         self.networks_table.setColumnWidth(0, 200)  # ESSID column - wider for full names
         self.networks_table.setColumnWidth(1, 150)  # BSSID column
