@@ -1153,7 +1153,7 @@ class AttackKARMA(Attack):
                 Color.pl('{+} {O}Attempting fallback attack mode...{W}')
                 if not self.fallback_attack_mode():
                     Color.pl('{!} {R}Fallback attack mode also failed{W}')
-                    self.cleanup_and_restore_interfaces()
+                    self.cleanup()
                     return False
                 else:
                     Color.pl('{+} {G}Fallback attack mode activated{W}')
@@ -1167,7 +1167,7 @@ class AttackKARMA(Attack):
                 Color.pl('{+} {O}Attempting fallback attack mode...{W}')
                 if not self.fallback_attack_mode():
                     Color.pl('{!} {R}Fallback attack mode also failed{W}')
-                    self.cleanup_and_restore_interfaces()
+                    self.cleanup()
                     return False
                 else:
                     Color.pl('{+} {G}Fallback attack mode activated{W}')
@@ -1177,6 +1177,7 @@ class AttackKARMA(Attack):
                 # Single interface: Switch to rogue AP mode
                 if not self.switch_interface_mode('managed', 'Rogue AP Setup'):
                     Color.pl('{!} {R}Failed to switch to rogue AP mode{W}')
+                    self.cleanup()
                     return False
             else:
                 # Dual interface: Setup rogue AP on separate interface
@@ -1186,6 +1187,7 @@ class AttackKARMA(Attack):
                 Color.pattack('KARMA', self.target, 'Stage 3', 'Setting up Evil Twin')
             if not self.setup_rogue_ap():
                 Color.pl('{!} {R}Failed to setup Evil Twin infrastructure{W}')
+                self.cleanup()
                 return False
             
             # Stage 4: Deauthentication Attack
@@ -1193,6 +1195,7 @@ class AttackKARMA(Attack):
                 Color.pattack('KARMA', self.target, 'Stage 4', 'Starting deauth attack')
             if not self.start_deauth_attack():
                 Color.pl('{!} {R}Failed to start deauthentication attack{W}')
+                self.cleanup()
                 return False
             
             # Stage 5: Handshake Capture & Monitoring
@@ -2960,8 +2963,12 @@ server=8.8.8.8
                 
         except KeyboardInterrupt:
             Color.pl('{!} {O}KARMA attack interrupted by user{W}')
+            # Ensure cleanup runs when interrupted
+            self.cleanup()
         except Exception as e:
             Color.pl('{!} {R}Monitoring error: {O}%s{W}' % str(e))
+            # Ensure cleanup runs on error
+            self.cleanup()
     
     def start_dual_interface_monitoring(self):
         """Start monitoring for dual interface mode (probe capture + rogue AP simultaneously)"""
@@ -2996,8 +3003,12 @@ server=8.8.8.8
                 
         except KeyboardInterrupt:
             Color.pl('{!} {O}KARMA attack interrupted by user{W}')
+            # Ensure cleanup runs when interrupted
+            self.cleanup()
         except Exception as e:
             Color.pl('{!} {R}Dual interface monitoring error: {O}%s{W}' % str(e))
+            # Ensure cleanup runs on error
+            self.cleanup()
     
     def continuous_probe_capture(self):
         """Continuous probe capture for dual interface mode"""
