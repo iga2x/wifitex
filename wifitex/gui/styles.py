@@ -132,6 +132,23 @@ class DarkTheme:
             border: 1px solid {cls.BORDER_PRIMARY};
             color: {cls.TEXT_PRIMARY};
             selection-background-color: {cls.PRIMARY_COLOR};
+            selection-color: white;
+        }}
+        
+        QComboBox QAbstractItemView::item {{
+            background-color: transparent;
+            color: {cls.TEXT_PRIMARY};
+            padding: 4px 8px;
+        }}
+        
+        QComboBox QAbstractItemView::item:selected {{
+            background-color: {cls.PRIMARY_COLOR};
+            color: white;
+        }}
+        
+        QComboBox QAbstractItemView::item:hover {{
+            background-color: {cls.BG_TERTIARY};
+            color: {cls.TEXT_PRIMARY};
         }}
         
         /* Line Edits */
@@ -202,16 +219,30 @@ class DarkTheme:
             color: {cls.TEXT_PRIMARY};
             gridline-color: {cls.BORDER_PRIMARY};
             selection-background-color: {cls.PRIMARY_COLOR};
+            alternate-background-color: {cls.BG_TERTIARY};
         }}
         
         QTableWidget::item {{
             padding: 4px;
             border: none;
+            background-color: transparent;
+            color: {cls.TEXT_PRIMARY};
         }}
         
         QTableWidget::item:selected {{
             background-color: {cls.PRIMARY_COLOR};
+            color: white;
+        }}
+        
+        QTableWidget::item:hover {{
+            background-color: {cls.BG_TERTIARY};
             color: {cls.TEXT_PRIMARY};
+        }}
+        
+        QTableWidget::item:focus {{
+            background-color: {cls.PRIMARY_COLOR};
+            color: white;
+            outline: none;
         }}
         
         QHeaderView::section {{
@@ -402,6 +433,35 @@ class DarkTheme:
         /* Message Box */
         QMessageBox {{
             background-color: {cls.BG_PRIMARY};
+            color: {cls.TEXT_PRIMARY};
+        }}
+        
+        /* Global selection fixes - prevent white highlighting */
+        * {{
+            selection-background-color: {cls.PRIMARY_COLOR};
+            selection-color: white;
+        }}
+        
+        /* Override any system default white backgrounds */
+        QAbstractItemView {{
+            background-color: {cls.BG_SECONDARY};
+            color: {cls.TEXT_PRIMARY};
+            selection-background-color: {cls.PRIMARY_COLOR};
+            selection-color: white;
+        }}
+        
+        QAbstractItemView::item {{
+            background-color: transparent;
+            color: {cls.TEXT_PRIMARY};
+        }}
+        
+        QAbstractItemView::item:selected {{
+            background-color: {cls.PRIMARY_COLOR};
+            color: white;
+        }}
+        
+        QAbstractItemView::item:hover {{
+            background-color: {cls.BG_TERTIARY};
             color: {cls.TEXT_PRIMARY};
         }}
         
