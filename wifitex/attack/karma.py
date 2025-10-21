@@ -997,9 +997,11 @@ class AttackKARMA(Attack):
                 pass
             
             # Bring interface down
-            subprocess.run(['ifconfig', interface, 'down'], capture_output=True, timeout=5)
-            time.sleep(1)
-            
+            try:
+                subprocess.run(['ifconfig', interface, 'down'], capture_output=True, timeout=5)
+                time.sleep(1)
+            except Exception as e:
+                Color.pl('{!} {O}Warning: Failed to bring interface down: {R}%s{W}' % str(e))
             
             # Set mode based on target
             if target_mode == 'managed':
@@ -1022,8 +1024,17 @@ class AttackKARMA(Attack):
                 return False
             
             # Bring interface back up
-            subprocess.run(['ifconfig', interface, 'up'], capture_output=True, timeout=5)
-            time.sleep(2)
+            try:
+                subprocess.run(['ifconfig', interface, 'up'], capture_output=True, timeout=5)
+                time.sleep(2)
+            except Exception as e:
+                Color.pl('{!} {O}Warning: Failed to bring interface up: {R}%s{W}' % str(e))
+                # Try alternative method
+                try:
+                    subprocess.run(['ip', 'link', 'set', interface, 'up'], capture_output=True, timeout=5)
+                    Color.pl('{+} {G}Interface brought up using alternative method{W}')
+                except Exception as e2:
+                    Color.pl('{!} {R}Failed to bring interface up with alternative method: {O}%s{W}' % str(e2))
             
             # Comprehensive verification of mode change
             return self.verify_interface_mode(interface, target_mode)
@@ -1138,14 +1149,28 @@ class AttackKARMA(Attack):
                 Color.pattack('KARMA', self.target, 'Stage 1', 'Capturing PNL data')
             if not self.capture_probe_requests():
                 Color.pl('{!} {R}Failed to capture sufficient probe requests{W}')
-                return False
+                # Try fallback attack mode
+                Color.pl('{+} {O}Attempting fallback attack mode...{W}')
+                if not self.fallback_attack_mode():
+                    Color.pl('{!} {R}Fallback attack mode also failed{W}')
+                    self.cleanup_and_restore_interfaces()
+                    return False
+                else:
+                    Color.pl('{+} {G}Fallback attack mode activated{W}')
             
             # Stage 2: Identify Real Networks with Clients
             if hasattr(self, 'target') and self.target:
                 Color.pattack('KARMA', self.target, 'Stage 2', 'Scanning for real networks')
             if not self.identify_real_networks():
                 Color.pl('{!} {R}No real networks with clients found{W}')
-                return False
+                # Try fallback attack mode
+                Color.pl('{+} {O}Attempting fallback attack mode...{W}')
+                if not self.fallback_attack_mode():
+                    Color.pl('{!} {R}Fallback attack mode also failed{W}')
+                    self.cleanup_and_restore_interfaces()
+                    return False
+                else:
+                    Color.pl('{+} {G}Fallback attack mode activated{W}')
             
             # Stage 3: Setup Evil Twin Infrastructure
             if self.single_interface_mode:
@@ -1531,6 +1556,111 @@ class AttackKARMA(Attack):
         except Exception as e:
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error escalating deauth intensity: {O}%s{W}' % str(e))
+    
+    def fallback_attack_mode(self):
+        """Fallback attack mode when probe capture fails"""
+        try:
+            Color.pl('{+} {O}Activating fallback attack mode...{W}')
+            Color.pl('{+} {C}This mode will use common SSIDs and aggressive deauth{W}')
+            
+            # Create fallback PNL with common SSIDs
+            self.pnl_networks = {
+                'linksys', 'netgear', 'dlink', 'belkin', 'asus', 'tp-link',
+                'wifi', 'wireless', 'internet', 'home', 'office', 'guest',
+                'admin', 'default', 'router', 'modem', 'attwifi', 'xfinitywifi',
+                'Verizon_WiFi', 'SpectrumWiFi', 'CoxWiFi', 'CenturyLinkWiFi'
+            }
+            
+            Color.pl('{+} {G}Fallback PNL created with {C}%d{W} common SSIDs{W}' % len(self.pnl_networks))
+            
+            # Try to identify real networks with clients
+            if not self.identify_real_networks():
+                Color.pl('{!} {R}Still no real networks found in fallback mode{W}')
+                return False
+            
+            # Mark as fallback mode
+            self.fallback_mode = True
+            Color.pl('{+} {G}Fallback attack mode activated successfully{W}')
+            return True
+            
+        except Exception as e:
+            Color.pl('{!} {R}Fallback attack mode failed: {O}%s{W}' % str(e))
+            return False
+    
+    def cleanup_and_restore_interfaces(self):
+        """Clean up interfaces and restore them to working state"""
+        try:
+            Color.pl('{+} {C}Cleaning up interfaces and restoring network...{W}')
+            
+            # Stop all processes
+            self.stop_all_processes()
+            
+            # Restore interfaces to managed mode
+            interfaces_to_restore = []
+            if hasattr(self, 'probe_interface') and self.probe_interface:
+                interfaces_to_restore.append(self.probe_interface)
+            if hasattr(self, 'rogue_interface') and self.rogue_interface:
+                interfaces_to_restore.append(self.rogue_interface)
+            
+            for iface in interfaces_to_restore:
+                try:
+                    Color.pl('{+} {C}Restoring interface {G}%s{W} to managed mode...{W}' % iface)
+                    
+                    # Bring interface down
+                    subprocess.run(['ip', 'link', 'set', iface, 'down'], capture_output=True)
+                    
+                    # Set to managed mode
+                    subprocess.run(['iw', 'dev', iface, 'set', 'type', 'managed'], capture_output=True)
+                    
+                    # Flush IP addresses
+                    subprocess.run(['ip', 'addr', 'flush', 'dev', iface], capture_output=True)
+                    
+                    # Bring interface up
+                    subprocess.run(['ip', 'link', 'set', iface, 'up'], capture_output=True)
+                    
+                    Color.pl('{+} {G}Interface {G}%s{W} restored to managed mode{W}' % iface)
+                    
+                except Exception as e:
+                    Color.pl('{!} {O}Warning: Failed to restore interface {G}%s{W}: {R}%s{W}' % (iface, str(e)))
+            
+            # Unblock rfkill
+            try:
+                subprocess.run(['rfkill', 'unblock', 'all'], capture_output=True)
+                Color.pl('{+} {G}Unblocked all rfkill devices{W}')
+            except Exception as e:
+                Color.pl('{!} {R}Failed to unblock rfkill: {O}%s{W}' % str(e))
+            
+            # Restart network services
+            try:
+                subprocess.run(['systemctl', 'restart', 'NetworkManager'], capture_output=True)
+                Color.pl('{+} {G}Restarted NetworkManager{W}')
+            except Exception as e:
+                Color.pl('{!} {O}Warning: Failed to restart NetworkManager: {R}%s{W}' % str(e))
+            
+            Color.pl('{+} {G}Interface cleanup and restoration complete{W}')
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error during interface cleanup: {O}%s{W}' % str(e))
+    
+    def stop_all_processes(self):
+        """Stop all running processes"""
+        try:
+            # Kill hostapd processes
+            subprocess.run(['pkill', '-f', 'hostapd'], capture_output=True)
+            
+            # Kill dnsmasq processes
+            subprocess.run(['pkill', '-f', 'dnsmasq'], capture_output=True)
+            
+            # Kill airodump processes
+            subprocess.run(['pkill', '-f', 'airodump'], capture_output=True)
+            
+            # Kill aireplay processes
+            subprocess.run(['pkill', '-f', 'aireplay'], capture_output=True)
+            
+            Color.pl('{+} {G}Stopped all attack processes{W}')
+            
+        except Exception as e:
+            Color.pl('{!} {O}Warning: Error stopping processes: {R}%s{W}' % str(e))
     
     def send_adaptive_deauth(self, network, client, intensity):
         """Send adaptive deauth packets based on intensity level"""
