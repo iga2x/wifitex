@@ -1,0 +1,13 @@
+{
+    "python.defaultInterpreterPath": "/usr/bin/python3",
+    "python.analysis.include": [
+        "wifitex/**"
+    ],
+    "python.analysis.extraPaths": [
+        "."
+    ],
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true
+    }
+}

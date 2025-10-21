@@ -1,0 +1,163 @@
+.TH WIFITEX-GUI 1 "2024-01-01" "Wifitex 2.2.5" "Wireless Network Auditor GUI"
+.SH NAME
+wifitex-gui \- Graphical interface for Wifitex wireless network auditor
+.SH SYNOPSIS
+.B wifitex-gui
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+Wifitex GUI provides a modern, user-friendly graphical interface for the Wifitex 
+wireless network auditing tool. Built with PyQt6, it offers an intuitive way 
+to perform wireless security assessments without needing to remember complex 
+command-line arguments.
+
+The GUI interface includes:
+
+.TP
+.B Network Scanning
+Real-time wireless network discovery with automatic updates
+.TP
+.B Attack Management
+Easy-to-use attack controls with progress tracking
+.TP
+.B Tool Status Monitoring
+Real-time status of required tools and dependencies
+.TP
+.B Logging System
+Comprehensive logging with export capabilities
+.TP
+.B Settings Management
+Persistent configuration with import/export
+
+.SH OPTIONS
+.TP
+.B -h, --help
+Show help message and exit
+.TP
+.B --version
+Show version information and exit
+
+.SH FEATURES
+.TP
+.B Modern Interface
+Clean, dark-themed interface built with PyQt6
+.TP
+.B Real-time Updates
+Live network discovery and attack progress
+.TP
+.B Multiple Attack Types
+Support for WPS, WPA, PMKID, and WEP attacks
+.TP
+.B Progress Tracking
+Visual progress indicators and status updates
+.TP
+.B System Integration
+Desktop entry, symlinks, and proper system integration
+
+.SH USAGE
+The GUI provides an intuitive interface for wireless network auditing:
+
+.TP
+1. Select your wireless interface from the dropdown
+.TP
+2. Configure scan options (channel, frequency band)
+.TP
+3. Click "Start Scan" to discover networks
+.TP
+4. Select target networks from the list
+.TP
+5. Choose attack type and configure options
+.TP
+6. Click "Start Attack" to begin the attack
+
+.SH ATTACK TYPES
+.TP
+.B Auto (Recommended)
+Automatically chooses the best attack method
+.TP
+.B WPS Pixie Dust
+Offline brute-force attack on WPS
+.TP
+.B WPS PIN
+Online brute-force PIN attack
+.TP
+.B WPA Handshake
+Capture and crack WPA handshakes
+.TP
+.B PMKID
+Capture and crack PMKID hashes
+.TP
+.B WEP
+Various WEP attacks (replay, chopchop, fragment, etc.)
+
+.SH REQUIREMENTS
+The GUI requires the same system dependencies as the command-line version:
+
+.TP
+.B System Requirements:
+Linux operating system, Python 3.6+, root privileges
+.TP
+.B GUI Dependencies:
+PyQt6, psutil, requests
+.TP
+.B Wireless Tools:
+aircrack-ng, iwconfig, ifconfig, tshark, reaver, bully, cowpatty, hashcat
+
+.SH INSTALLATION
+.TP
+.B Quick Installation:
+sudo ./quick_start.sh
+.TP
+.B Manual Installation:
+sudo python install.py install
+.TP
+.B Test Installation:
+python test_gui.py
+
+.SH FILES
+.TP
+.B Dynamic system applications directory (e.g., /usr/share/applications/wifitex-gui.desktop)
+Desktop entry file
+.TP
+.B Dynamic system pixmaps directory (e.g., /usr/share/pixmaps/wifitex-*.png)
+Application icons
+.TP
+.B ~/.config/wifitex/config.json
+GUI configuration file
+.TP
+.B ~/.config/Wifitex/GUI.conf
+Qt application settings
+.TP
+.B Dynamic temp directory (e.g., /tmp/wifitex_gui.log)
+Application log file
+
+.SH TROUBLESHOOTING
+.TP
+.B "Root privileges required"
+Run with: sudo wifitex-gui
+.TP
+.B "PyQt6 not found"
+Install dependencies: pip install -r requirements-gui.txt
+.TP
+.B "No wireless interfaces found"
+Check wireless drivers and run: sudo airmon-ng
+.TP
+.B "Missing tools"
+Install required tools using your package manager
+
+.SH BUGS
+Report bugs to https://github.com/iga2x/wifitex/issues
+
+.SH AUTHOR
+Wifitex GUI Team
+
+.SH COPYRIGHT
+Copyright (C) 2024 iga2x
+This program is free software; you can redistribute it and/or modify it under 
+the terms of the GNU General Public License as published by the Free Software 
+Foundation; either version 2 of the License, or (at your option) any later version.
+
+.SH SEE ALSO
+.BR wifitex (1),
+.BR aircrack-ng (1),
+.BR airodump-ng (1),
+.BR airmon-ng (1)

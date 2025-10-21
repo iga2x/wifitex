@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""
+Desktop launcher for wifiteX GUI
+This script provides an easy way to launch the GUI from desktop
+"""
+
+import sys
+import os
+import subprocess
+from pathlib import Path
+
+def main():
+    # Get the directory where this script is located
+    script_dir = Path(__file__).parent.absolute()
+    
+    # Change to the wifiteX directory
+    os.chdir(script_dir)
+    
+    # Check if we're running as root
+    if os.geteuid() != 0:
+        print("🔐 wifiteX requires root privileges for wireless operations")
+        print("   Attempting to launch with elevated privileges...")
+        
+        # Try different sudo methods
+        try:
+            # Try pkexec first
+            subprocess.run(['pkexec', 'python3', '-m', 'wifitex.gui'], check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            try:
+                # Try gksudo
+                subprocess.run(['gksudo', 'python3', '-m', 'wifitex.gui'], check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                try:
+                    # Try kdesudo
+                    subprocess.run(['kdesudo', 'python3', '-m', 'wifitex.gui'], check=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    print("❌ No GUI sudo method found!")
+                    print("   Please run manually: sudo python3 -m wifitex.gui")
+                    print("   Or install: sudo apt install policykit-1-gnome")
+                    sys.exit(1)
+    else:
+        # Run directly as root
+        print("✓ Running as root, launching GUI...")
+        subprocess.run(['python3', '-m', 'wifitex.gui'], check=True)
+
+if __name__ == "__main__":
+    main()
