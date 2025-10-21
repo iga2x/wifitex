@@ -3553,8 +3553,8 @@ server=8.8.8.8
             pass
 
     def restore_network_services(self):
-        """Restore services, iptables, and interface state after attack"""
-        Color.pl('{+} {C}Restoring network services and interfaces...{W}')
+        """Enhanced restoration of services, iptables, and interface state after attack"""
+        Color.pl('{+} {C}Performing enhanced network restoration for optimal scanning...{W}')
         
         # Kill processes
         try:
@@ -3570,6 +3570,15 @@ server=8.8.8.8
                 Color.pl('{+} {G}Killed dnsmasq processes{W}')
             except Exception as e:
                 Color.pl('{!} {O}Warning: Failed to kill dnsmasq: {R}%s{W}' % str(e))
+
+        # Kill any remaining attack processes
+        try:
+            subprocess.run(['pkill', '-f', 'airodump'], capture_output=True)
+            subprocess.run(['pkill', '-f', 'aireplay'], capture_output=True)
+            subprocess.run(['pkill', '-f', 'airmon'], capture_output=True)
+            Color.pl('{+} {G}Killed remaining attack processes{W}')
+        except Exception as e:
+            Color.pl('{!} {O}Warning: Failed to kill attack processes: {R}%s{W}' % str(e))
 
         # Disable IP forwarding
         try:
@@ -3589,7 +3598,7 @@ server=8.8.8.8
         except Exception as e:
             Color.pl('{!} {O}Warning: Failed to clean iptables: {R}%s{W}' % str(e))
 
-        # Unblock rfkill - CRITICAL for restoring wireless
+        # Enhanced rfkill unblocking
         try:
             result = subprocess.run(['rfkill', 'unblock', 'all'], capture_output=True, text=True)
             if result.returncode == 0:
@@ -3601,47 +3610,152 @@ server=8.8.8.8
             Color.pl('{!} {R}CRITICAL: Failed to unblock rfkill: {O}%s{W}' % str(e))
             Color.pl('{!} {O}Run manually: {C}sudo rfkill unblock all{W}')
 
-        # Restore interface to managed mode
-        try:
-            iface = getattr(self, 'rogue_interface', None) or getattr(self, 'probe_interface', None)
-            if iface:
-                Color.pl('{+} {C}Restoring interface {G}%s{W} to managed mode{W}' % iface)
-                subprocess.run(['ip', 'link', 'set', iface, 'down'], capture_output=True)
-                subprocess.run(['iw', 'dev', iface, 'set', 'type', 'managed'], capture_output=True)
-                subprocess.run(['ip', 'addr', 'flush', 'dev', iface], capture_output=True)
-                subprocess.run(['ip', 'link', 'set', iface, 'up'], capture_output=True)
-                Color.pl('{+} {G}Interface {G}%s{W} restored to managed mode{W}' % iface)
-        except Exception as e:
-            Color.pl('{!} {O}Warning: Failed to restore interface: {R}%s{W}' % str(e))
+        # Enhanced interface restoration for optimal scanning
+        self.enhanced_interface_restoration()
 
-        # Restart network services (but be careful not to trigger rfkill blocking)
+        # Restart network services for optimal scanning
+        self.restart_network_services_for_scanning()
+        
+        # Wait for services to stabilize
+        Color.pl('{+} {C}Waiting for network services to stabilize...{W}')
+        time.sleep(3)
+        
+        # Verify restoration
+        self.verify_network_restoration()
+    
+    def enhanced_interface_restoration(self):
+        """Enhanced interface restoration for optimal scanning"""
         try:
-            Color.pl('{+} {C}Restarting network services...{W}')
-            # Only restart services that exist and won't cause rfkill issues
+            Color.pl('{+} {C}Performing enhanced interface restoration...{W}')
+            
+            # Get all wireless interfaces
+            interfaces_to_restore = []
+            if hasattr(self, 'probe_interface') and self.probe_interface:
+                interfaces_to_restore.append(self.probe_interface)
+            if hasattr(self, 'rogue_interface') and self.rogue_interface:
+                interfaces_to_restore.append(self.rogue_interface)
+            
+            # Also check for common interface names
+            common_interfaces = ['wlan0', 'wlan1', 'wlan2', 'wlp3s0', 'wlp4s0']
+            for iface in common_interfaces:
+                try:
+                    result = subprocess.run(['iwconfig', iface], capture_output=True, timeout=2)
+                    if result.returncode == 0 and iface not in interfaces_to_restore:
+                        interfaces_to_restore.append(iface)
+                except:
+                    pass
+            
+            # Restore each interface
+            for iface in interfaces_to_restore:
+                try:
+                    Color.pl('{+} {C}Restoring interface {G}%s{W} for optimal scanning...{W}' % iface)
+                    
+                    # Stop airmon-ng if running
+                    try:
+                        subprocess.run(['airmon-ng', 'stop', iface], capture_output=True, timeout=5)
+                    except:
+                        pass
+                    
+                    # Bring interface down
+                    subprocess.run(['ip', 'link', 'set', iface, 'down'], capture_output=True, timeout=5)
+                    time.sleep(1)
+                    
+                    # Set to managed mode
+                    subprocess.run(['iw', 'dev', iface, 'set', 'type', 'managed'], capture_output=True, timeout=5)
+                    time.sleep(1)
+                    
+                    # Flush IP addresses
+                    subprocess.run(['ip', 'addr', 'flush', 'dev', iface], capture_output=True, timeout=5)
+                    
+                    # Bring interface up
+                    subprocess.run(['ip', 'link', 'set', iface, 'up'], capture_output=True, timeout=5)
+                    time.sleep(2)
+                    
+                    # Verify interface is working
+                    result = subprocess.run(['iwconfig', iface], capture_output=True, text=True, timeout=3)
+                    if result.returncode == 0 and 'Mode:Managed' in result.stdout:
+                        Color.pl('{+} {G}Interface {G}%s{W} restored successfully{W}' % iface)
+                    else:
+                        Color.pl('{!} {O}Warning: Interface {G}%s{W} may not be fully restored{W}' % iface)
+                    
+                except Exception as e:
+                    Color.pl('{!} {O}Warning: Failed to restore interface {G}%s{W}: {R}%s{W}' % (iface, str(e)))
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error in enhanced interface restoration: {O}%s{W}' % str(e))
+    
+    def restart_network_services_for_scanning(self):
+        """Restart network services for optimal scanning"""
+        try:
+            Color.pl('{+} {C}Restarting network services for optimal scanning...{W}')
+            
+            # Restart NetworkManager for better scanning
+            try:
+                result = subprocess.run(['systemctl', 'is-active', 'NetworkManager'], capture_output=True)
+                if result.returncode == 0:
+                    subprocess.run(['systemctl', 'restart', 'NetworkManager'], capture_output=True)
+                    Color.pl('{+} {G}Restarted NetworkManager for optimal scanning{W}')
+                else:
+                    subprocess.run(['systemctl', 'start', 'NetworkManager'], capture_output=True)
+                    Color.pl('{+} {G}Started NetworkManager for optimal scanning{W}')
+            except Exception as e:
+                Color.pl('{!} {O}Warning: Failed to restart NetworkManager: {R}%s{W}' % str(e))
+            
+            # Restart systemd-resolved
             try:
                 result = subprocess.run(['systemctl', 'is-active', 'systemd-resolved'], capture_output=True)
                 if result.returncode == 0:
                     subprocess.run(['systemctl', 'restart', 'systemd-resolved'], capture_output=True)
                     Color.pl('{+} {G}Restarted systemd-resolved{W}')
                 else:
-                    Color.pl('{+} {O}systemd-resolved not active (skipping){W}')
-            except:
-                pass
-                
-            # Be more careful with NetworkManager - it might trigger rfkill blocking
-            try:
-                result = subprocess.run(['systemctl', 'is-active', 'NetworkManager'], capture_output=True)
-                if result.returncode == 0:
-                    # Just reload NetworkManager instead of restart to avoid rfkill issues
-                    subprocess.run(['systemctl', 'reload', 'NetworkManager'], capture_output=True)
-                    Color.pl('{+} {G}Reloaded NetworkManager{W}')
-                else:
-                    Color.pl('{+} {O}NetworkManager not active (skipping){W}')
-            except:
-                pass
-                
+                    subprocess.run(['systemctl', 'start', 'systemd-resolved'], capture_output=True)
+                    Color.pl('{+} {G}Started systemd-resolved{W}')
+            except Exception as e:
+                Color.pl('{!} {O}Warning: Failed to restart systemd-resolved: {R}%s{W}' % str(e))
+            
         except Exception as e:
-            Color.pl('{!} {O}Warning: Failed to restart network services: {R}%s{W}' % str(e))
+            Color.pl('{!} {R}Error restarting network services: {O}%s{W}' % str(e))
+    
+    def verify_network_restoration(self):
+        """Verify that network restoration was successful"""
+        try:
+            Color.pl('{+} {C}Verifying network restoration...{W}')
+            
+            # Check rfkill status
+            try:
+                result = subprocess.run(['rfkill', 'list'], capture_output=True, text=True)
+                if 'Soft blocked: yes' in result.stdout:
+                    Color.pl('{!} {R}WARNING: Some interfaces are still blocked!{W}')
+                    Color.pl('{!} {O}Run: {C}sudo rfkill unblock all{W}')
+                else:
+                    Color.pl('{+} {G}All interfaces are unblocked{W}')
+            except:
+                pass
+            
+            # Check NetworkManager status
+            try:
+                result = subprocess.run(['systemctl', 'is-active', 'NetworkManager'], capture_output=True, text=True)
+                if 'active' in result.stdout:
+                    Color.pl('{+} {G}NetworkManager is active{W}')
+                else:
+                    Color.pl('{!} {O}NetworkManager is not active{W}')
+            except:
+                pass
+            
+            # Check interface status
+            try:
+                result = subprocess.run(['iwconfig'], capture_output=True, text=True)
+                if 'Mode:Managed' in result.stdout:
+                    Color.pl('{+} {G}Interfaces are in managed mode{W}')
+                else:
+                    Color.pl('{!} {O}Some interfaces may not be in managed mode{W}')
+            except:
+                pass
+            
+            Color.pl('{+} {G}Network restoration verification complete{W}')
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error verifying network restoration: {O}%s{W}' % str(e))
     
     def basic_cleanup(self):
         """Basic cleanup when main restore fails"""
