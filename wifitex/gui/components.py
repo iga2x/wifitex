@@ -1678,7 +1678,9 @@ class UnifiedScanWorker(QThread):
             self.scan_completed.emit(final_networks)
                 
         except Exception as e:
+            import traceback
             logger.error(f"[SCAN] Error in unified scanner: {e}")
+            logger.error(f"[SCAN] Traceback: {traceback.format_exc()}")
             self.scan_progress.emit({'message': f'Scan error: {str(e)}'})
             self.scan_completed.emit([])
     
@@ -2342,6 +2344,9 @@ class ScanWorker(QThread):
             self.scan_completed.emit(all_networks)
                 
         except Exception as e:
+            import traceback
+            logger.error(f"[SCAN] Error in ScanWorker: {e}")
+            logger.error(f"[SCAN] Traceback: {traceback.format_exc()}")
             self.scan_progress.emit({'message': f'Scan error: {str(e)}'})
             self.scan_completed.emit([])
     
@@ -2670,6 +2675,8 @@ class ScanWorker(QThread):
         """Enhanced encryption type detection"""
         if not encryption or encryption == '':
             return 'Unknown'
+        elif 'WPA3' in encryption:
+            return 'WPA3'
         elif 'WPA2' in encryption and 'WPA' in encryption:
             return 'WPA2/WPA Mixed'
         elif 'WPA2' in encryption:
@@ -2703,8 +2710,8 @@ class ScanWorker(QThread):
             return 'Unknown'
         
         # Default heuristic based on encryption
-        if encryption in ['Open', 'WEP']:
-            return 'No'  # WPS not applicable to Open/WEP
+        if encryption in ['Open', 'WEP', 'WPA3']:
+            return 'No'  # WPS not applicable to Open/WEP/WPA3
         elif encryption in ['WPA2', 'WPA', 'WPA2/WPA Mixed']:
             return 'Yes'  # Most consumer routers have WPS
         
@@ -2922,8 +2929,10 @@ class ScanWorker(QThread):
                     network['wps'] = 'Yes'
                 elif 'open' in encryption:
                     network['wps'] = 'No'  # Open networks typically don't have WPS
+                elif 'wpa3' in encryption.lower():
+                    network['wps'] = 'No'  # WPA3 networks do not support WPS
                 elif 'wpa' in encryption:
-                    network['wps'] = 'Yes'  # WPA networks usually have WPS
+                    network['wps'] = 'Yes'  # WPA/WPA2 networks usually have WPS
                 else:
                     network['wps'] = 'Unknown'  # Default fallback
                     

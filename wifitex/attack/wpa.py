@@ -20,11 +20,12 @@ from shutil import copy
 
 class AttackWPA(Attack):
     """
-    WPA/WPA2 handshake capture attack.
+    WPA/WPA2/WPA3 handshake capture attack.
     
-    This class handles both WPA and WPA2 networks as they use the same
-    handshake capture mechanism. WPA2 is essentially WPA with stronger
-    encryption, but the attack methodology is identical.
+    This class handles WPA, WPA2, and WPA3 networks as they use similar
+    handshake capture mechanisms. WPA2 is essentially WPA with stronger
+    encryption, and WPA3 uses SAE (Simultaneous Authentication of Equals)
+    but still allows handshake capture for offline cracking.
     """
     def __init__(self, target):
         super(AttackWPA, self).__init__(target)

