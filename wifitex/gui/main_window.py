@@ -217,9 +217,9 @@ class WifitexMainWindow(QMainWindow):
         networks_layout = QVBoxLayout(networks_group)
         
         self.networks_table = QTableWidget()
-        self.networks_table.setColumnCount(7)
+        self.networks_table.setColumnCount(8)
         self.networks_table.setHorizontalHeaderLabels([
-            "ESSID", "BSSID", "Channel", "Power", "Encryption", "WPS", "Clients"
+            "Signal", "ESSID", "BSSID", "Channel", "Power", "Encryption", "WPS", "Clients"
         ])
         self.networks_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.networks_table.setAlternatingRowColors(True)
@@ -228,13 +228,14 @@ class WifitexMainWindow(QMainWindow):
         self.networks_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         
         # Set column widths to accommodate full ESSID names
-        self.networks_table.setColumnWidth(0, 200)  # ESSID column - wider for full names
-        self.networks_table.setColumnWidth(1, 150)  # BSSID column
-        self.networks_table.setColumnWidth(2, 80)   # Channel column
-        self.networks_table.setColumnWidth(3, 80)   # Power column
-        self.networks_table.setColumnWidth(4, 120)  # Encryption column
-        self.networks_table.setColumnWidth(5, 60)   # WPS column
-        self.networks_table.setColumnWidth(6, 80)   # Clients column
+        self.networks_table.setColumnWidth(0, 80)   # Signal column - signal strength icons
+        self.networks_table.setColumnWidth(1, 200)  # ESSID column - wider for full names
+        self.networks_table.setColumnWidth(2, 150)  # BSSID column
+        self.networks_table.setColumnWidth(3, 80)   # Channel column
+        self.networks_table.setColumnWidth(4, 80)   # Power column
+        self.networks_table.setColumnWidth(5, 120)  # Encryption column
+        self.networks_table.setColumnWidth(6, 60)   # WPS column
+        self.networks_table.setColumnWidth(7, 80)   # Clients column
         
         networks_layout.addWidget(self.networks_table)
         
@@ -1032,13 +1033,27 @@ class WifitexMainWindow(QMainWindow):
             wps = network.get('wps', 'Unknown').strip() or 'Unknown'
             clients = str(network.get('clients', 0))
             
-            self.networks_table.setItem(row, 0, QTableWidgetItem(essid))
-            self.networks_table.setItem(row, 1, QTableWidgetItem(bssid))
-            self.networks_table.setItem(row, 2, QTableWidgetItem(channel))
-            self.networks_table.setItem(row, 3, QTableWidgetItem(power))
-            self.networks_table.setItem(row, 4, QTableWidgetItem(encryption))
-            self.networks_table.setItem(row, 5, QTableWidgetItem(wps))
-            self.networks_table.setItem(row, 6, QTableWidgetItem(clients))
+            # Signal strength icon
+            signal_icon = self.get_signal_icon(power)
+            self.networks_table.setItem(row, 0, QTableWidgetItem(signal_icon))
+            
+            # Enhanced ESSID with proximity info
+            essid_with_signal = self.get_enhanced_essid_display(essid, power)
+            self.networks_table.setItem(row, 1, QTableWidgetItem(essid_with_signal))
+            
+            self.networks_table.setItem(row, 2, QTableWidgetItem(bssid))
+            self.networks_table.setItem(row, 3, QTableWidgetItem(channel))
+            self.networks_table.setItem(row, 4, QTableWidgetItem(power))
+            self.networks_table.setItem(row, 5, QTableWidgetItem(encryption))
+            self.networks_table.setItem(row, 6, QTableWidgetItem(wps))
+            self.networks_table.setItem(row, 7, QTableWidgetItem(clients))
+            
+            # Add attack success indicator as tooltip
+            success_indicator = self.get_attack_success_indicator(network)
+            for col in range(self.networks_table.columnCount()):
+                item = self.networks_table.item(row, col)
+                if item:
+                    item.setToolTip(f"Attack Success: {success_indicator}")
         
     def populate_networks_table(self):
         """Populate the networks table with scan results"""
@@ -1064,15 +1079,159 @@ class WifitexMainWindow(QMainWindow):
             wps = network.get('wps', 'Unknown').strip() or 'Unknown'
             clients = str(network.get('clients', 0))
             
-            self.networks_table.setItem(row, 0, QTableWidgetItem(essid))
-            self.networks_table.setItem(row, 1, QTableWidgetItem(bssid))
-            self.networks_table.setItem(row, 2, QTableWidgetItem(channel))
-            self.networks_table.setItem(row, 3, QTableWidgetItem(power))
-            self.networks_table.setItem(row, 4, QTableWidgetItem(encryption))
-            self.networks_table.setItem(row, 5, QTableWidgetItem(wps))
-            self.networks_table.setItem(row, 6, QTableWidgetItem(clients))
+            # Signal strength icon
+            signal_icon = self.get_signal_icon(power)
+            self.networks_table.setItem(row, 0, QTableWidgetItem(signal_icon))
             
-        # Don't auto-resize to maintain fixed column widths
+            # Enhanced ESSID with proximity info
+            essid_with_signal = self.get_enhanced_essid_display(essid, power)
+            self.networks_table.setItem(row, 1, QTableWidgetItem(essid_with_signal))
+            
+            self.networks_table.setItem(row, 2, QTableWidgetItem(bssid))
+            self.networks_table.setItem(row, 3, QTableWidgetItem(channel))
+            self.networks_table.setItem(row, 4, QTableWidgetItem(power))
+            self.networks_table.setItem(row, 5, QTableWidgetItem(encryption))
+            self.networks_table.setItem(row, 6, QTableWidgetItem(wps))
+            self.networks_table.setItem(row, 7, QTableWidgetItem(clients))
+            
+            # Add attack success indicator as tooltip
+            success_indicator = self.get_attack_success_indicator(network)
+            for col in range(self.networks_table.columnCount()):
+                item = self.networks_table.item(row, col)
+                if item:
+                    item.setToolTip(f"Attack Success: {success_indicator}")
+            
+        # Apply visual styling based on signal strength
+        self.apply_signal_styling()
+        
+        # Sort by signal strength (Power column) by default
+        self.networks_table.sortItems(4, Qt.SortOrder.DescendingOrder)
+    
+    def get_signal_icon(self, power_str):
+        """Get signal strength icon based on power level"""
+        try:
+            power = int(power_str)
+            if power >= -30:
+                return "📶"  # Excellent - 4 bars
+            elif power >= -50:
+                return "📶"  # Good - 3 bars  
+            elif power >= -70:
+                return "📶"  # Fair - 2 bars
+            elif power >= -80:
+                return "📶"  # Weak - 1 bar
+            else:
+                return "📶"  # Very Weak - 0 bars
+        except:
+            return "❓"  # Unknown
+    
+    def get_enhanced_essid_display(self, essid, power_str):
+        """Get enhanced ESSID display with signal bars and proximity info"""
+        try:
+            power = int(power_str)
+            
+            # Signal strength with visual bars
+            if power >= -30:
+                bars = "████"  # 4 bars - Excellent
+                color = "🟢"   # Green
+                proximity = "Very Close"
+            elif power >= -50:
+                bars = "███░"  # 3 bars - Good
+                color = "🟡"   # Yellow
+                proximity = "Close"
+            elif power >= -70:
+                bars = "██░░"  # 2 bars - Fair
+                color = "🟠"   # Orange
+                proximity = "Moderate"
+            elif power >= -80:
+                bars = "█░░░"  # 1 bar - Weak
+                color = "🔴"   # Red
+                proximity = "Far"
+            else:
+                bars = "░░░░"  # 0 bars - Very Weak
+                color = "⚫"   # Black
+                proximity = "Very Far"
+                
+            return f"{essid}\n{color} {bars} ({power}dBm) - {proximity}"
+        except:
+            return f"{essid}\n❓ Unknown Signal"
+    
+    def get_attack_success_indicator(self, network):
+        """Calculate attack success probability based on multiple factors"""
+        try:
+            power = int(network.get('power', -100))
+            clients = int(network.get('clients', 0))
+            encryption = network.get('encryption', 'Unknown')
+            wps = network.get('wps', 'Unknown')
+            
+            score = 0
+            
+            # Signal strength factor (40% weight)
+            if power >= -30:
+                score += 40
+            elif power >= -50:
+                score += 35
+            elif power >= -70:
+                score += 25
+            elif power >= -80:
+                score += 15
+            else:
+                score += 5
+                
+            # Client presence factor (30% weight)
+            if clients > 0:
+                score += min(30, clients * 5)  # Max 30 points for clients
+                
+            # Attack method availability (30% weight)
+            if wps == 'Yes':
+                score += 20  # WPS attacks are very effective
+            elif 'WPA' in encryption:
+                score += 15  # WPA attacks available
+            elif encryption == 'Open':
+                score += 25  # Open networks are easy targets
+                
+            # Determine success level
+            if score >= 80:
+                return "🟢 High Success (80%+)"
+            elif score >= 60:
+                return "🟡 Good Success (60-79%)"
+            elif score >= 40:
+                return "🟠 Moderate Success (40-59%)"
+            else:
+                return "🔴 Low Success (<40%)"
+                
+        except:
+            return "❓ Unknown"
+    
+    def apply_signal_styling(self):
+        """Apply visual styling based on signal strength"""
+        for row in range(self.networks_table.rowCount()):
+            power_item = self.networks_table.item(row, 4)  # Power column
+            if power_item:
+                try:
+                    power = int(power_item.text())
+                    
+                    # Color code rows based on signal strength
+                    if power >= -50:
+                        # Strong signal - green background
+                        for col in range(self.networks_table.columnCount()):
+                            item = self.networks_table.item(row, col)
+                            if item:
+                                item.setBackground(QColor(0, 100, 0, 50))  # Light green
+                    elif power >= -70:
+                        # Medium signal - yellow background  
+                        for col in range(self.networks_table.columnCount()):
+                            item = self.networks_table.item(row, col)
+                            if item:
+                                item.setBackground(QColor(100, 100, 0, 50))  # Light yellow
+                    else:
+                        # Weak signal - red background
+                        for col in range(self.networks_table.columnCount()):
+                            item = self.networks_table.item(row, col)
+                            if item:
+                                item.setBackground(QColor(100, 0, 0, 50))  # Light red
+                                
+                except ValueError:
+                    pass
         
     def on_network_selection_changed(self):
         """Handle network selection changes"""
