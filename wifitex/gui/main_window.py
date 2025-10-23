@@ -1006,18 +1006,22 @@ class WifitexMainWindow(QMainWindow):
         essid = network.get('essid', '').strip() or '<Hidden>'
         bssid = network.get('bssid', '').strip()
         channel = str(network.get('channel', '')).strip() or '?'
-        power = str(network.get('power', '')).strip() or '?'
+        power = self.format_power_value(network.get('power', ''))
         encryption = network.get('encryption', 'Unknown').strip() or 'Unknown'
         wps = network.get('wps', 'Unknown').strip() or 'Unknown'
         clients = str(network.get('clients', 0))
         
-        self.networks_table.setItem(row, 0, QTableWidgetItem(essid))
-        self.networks_table.setItem(row, 1, QTableWidgetItem(bssid))
-        self.networks_table.setItem(row, 2, QTableWidgetItem(channel))
-        self.networks_table.setItem(row, 3, QTableWidgetItem(power))
-        self.networks_table.setItem(row, 4, QTableWidgetItem(encryption))
-        self.networks_table.setItem(row, 5, QTableWidgetItem(wps))
-        self.networks_table.setItem(row, 6, QTableWidgetItem(clients))
+        # Create signal strength indicator
+        signal_indicator = self.create_signal_strength_indicator(power)
+        self.networks_table.setItem(row, 0, signal_indicator)
+        
+        self.networks_table.setItem(row, 1, QTableWidgetItem(essid))
+        self.networks_table.setItem(row, 2, QTableWidgetItem(bssid))
+        self.networks_table.setItem(row, 3, QTableWidgetItem(channel))
+        self.networks_table.setItem(row, 4, QTableWidgetItem(power))
+        self.networks_table.setItem(row, 5, QTableWidgetItem(encryption))
+        self.networks_table.setItem(row, 6, QTableWidgetItem(wps))
+        self.networks_table.setItem(row, 7, QTableWidgetItem(clients))
         
         # Don't auto-resize to maintain fixed column widths
         
@@ -1028,14 +1032,14 @@ class WifitexMainWindow(QMainWindow):
             essid = network.get('essid', '').strip() or '<Hidden>'
             bssid = network.get('bssid', '').strip()
             channel = str(network.get('channel', '')).strip() or '?'
-            power = str(network.get('power', '')).strip() or '?'
+            power = self.format_power_value(network.get('power', ''))
             encryption = network.get('encryption', 'Unknown').strip() or 'Unknown'
             wps = network.get('wps', 'Unknown').strip() or 'Unknown'
             clients = str(network.get('clients', 0))
             
-            # Signal strength icon
-            signal_icon = self.get_signal_icon(power)
-            self.networks_table.setItem(row, 0, QTableWidgetItem(signal_icon))
+            # Signal strength indicator
+            signal_indicator = self.create_signal_strength_indicator(power)
+            self.networks_table.setItem(row, 0, signal_indicator)
             
             # Enhanced ESSID with proximity info
             essid_with_signal = self.get_enhanced_essid_display(essid, power)
@@ -1074,14 +1078,14 @@ class WifitexMainWindow(QMainWindow):
             essid = network.get('essid', '').strip() or '<Hidden>'
             bssid = network.get('bssid', '').strip()
             channel = str(network.get('channel', '')).strip() or '?'
-            power = str(network.get('power', '')).strip() or '?'
+            power = self.format_power_value(network.get('power', ''))
             encryption = network.get('encryption', 'Unknown').strip() or 'Unknown'
             wps = network.get('wps', 'Unknown').strip() or 'Unknown'
             clients = str(network.get('clients', 0))
             
-            # Signal strength icon
-            signal_icon = self.get_signal_icon(power)
-            self.networks_table.setItem(row, 0, QTableWidgetItem(signal_icon))
+            # Signal strength indicator
+            signal_indicator = self.create_signal_strength_indicator(power)
+            self.networks_table.setItem(row, 0, signal_indicator)
             
             # Enhanced ESSID with proximity info
             essid_with_signal = self.get_enhanced_essid_display(essid, power)
@@ -1108,21 +1112,99 @@ class WifitexMainWindow(QMainWindow):
         self.networks_table.sortItems(4, Qt.SortOrder.DescendingOrder)
     
     def get_signal_icon(self, power_str):
-        """Get signal strength icon based on power level"""
+        """Get simple signal strength text based on power level"""
         try:
             power = int(power_str)
             if power >= -30:
-                return "📶"  # Excellent - 4 bars
+                return "🟢 Excellent"
             elif power >= -50:
-                return "📶"  # Good - 3 bars  
+                return "🟡 Good"
             elif power >= -70:
-                return "📶"  # Fair - 2 bars
+                return "🟠 Fair"
             elif power >= -80:
-                return "📶"  # Weak - 1 bar
+                return "🔴 Weak"
             else:
-                return "📶"  # Very Weak - 0 bars
+                return "⚫ Very Weak"
         except:
-            return "❓"  # Unknown
+            return "❓ Unknown"
+
+    def create_signal_strength_indicator(self, power_str):
+        """Create a simple signal strength indicator with text"""
+        try:
+            power = int(power_str)
+            
+            # Create simple text indicators based on power level
+            if power >= -30:
+                indicator = "Excellent"
+                color = "🟢"
+            elif power >= -50:
+                indicator = "Good"
+                color = "🟡"
+            elif power >= -70:
+                indicator = "Fair"
+                color = "🟠"
+            elif power >= -80:
+                indicator = "Weak"
+                color = "🔴"
+            else:
+                indicator = "Very Weak"
+                color = "⚫"
+            
+            # Create simple text indicator
+            text_indicator = f"{color} {indicator}"
+            
+            # Create table item with the indicator
+            item = QTableWidgetItem(text_indicator)
+            item.setToolTip(f"Signal Strength: {indicator} ({power} dBm)")
+            
+            # Set alignment
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            return item
+            
+        except (ValueError, TypeError):
+            # Handle invalid power values
+            item = QTableWidgetItem("❓ Unknown")
+            item.setToolTip("Signal Strength: Unknown")
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            return item
+    
+    def format_power_value(self, power_value):
+        """Format power value to proper dBm format"""
+        try:
+            # Handle different power value formats
+            if power_value is None or power_value == '':
+                return '?'
+            
+            # Convert to string first
+            power_str = str(power_value).strip()
+            
+            # If it's already a proper dBm value (starts with -), return as is
+            if power_str.startswith('-'):
+                return power_str
+            
+            # If it's a small positive number (like 7, 8, 9), convert to negative dBm
+            try:
+                power_num = int(power_str)
+                if 0 <= power_num <= 100:
+                    # Convert to negative dBm (typical range is -30 to -100)
+                    # Small positive numbers often represent signal quality, not dBm
+                    if power_num <= 10:
+                        return f'-{90 + power_num}'  # Convert 7 -> -97, 8 -> -98, 9 -> -99
+                    elif power_num <= 20:
+                        return f'-{80 + power_num}'  # Convert 15 -> -95
+                    elif power_num <= 30:
+                        return f'-{70 + power_num}'  # Convert 25 -> -95
+                    else:
+                        return f'-{power_num}'  # Convert larger numbers directly
+                else:
+                    return power_str
+            except ValueError:
+                return power_str
+                
+        except Exception as e:
+            # Simple error handling without external dependencies
+            return '?'
     
     def get_enhanced_essid_display(self, essid, power_str):
         """Get enhanced ESSID display with signal bars and proximity info"""

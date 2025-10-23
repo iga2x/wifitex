@@ -1183,8 +1183,27 @@ class AttackKARMA(Attack):
             # Stage 1: Passive PNL Capture
             if hasattr(self, 'target') and self.target:
                 Color.pattack('KARMA', self.target, 'Stage 1', 'Capturing PNL data')
-            if not self.capture_probe_requests():
-                Color.pl('{!} {R}Failed to capture sufficient probe requests{W}')
+            
+            # Try probe capture with retry mechanism
+            probe_success = False
+            max_probe_retries = 2
+            
+            for attempt in range(max_probe_retries):
+                if attempt > 0:
+                    Color.pl('{+} {O}Retrying probe capture (attempt {C}%d{W}/{C}%d{W})...{W}' % (attempt + 1, max_probe_retries))
+                    # Increase timeout for retry attempts
+                    Configuration.karma_probe_timeout = min(Configuration.karma_probe_timeout * 2, 120)
+                    Color.pl('{+} {C}Increased timeout to {G}%d{W} seconds{W}' % Configuration.karma_probe_timeout)
+                
+                if self.capture_probe_requests():
+                    probe_success = True
+                    break
+                elif attempt < max_probe_retries - 1:
+                    Color.pl('{!} {O}Probe capture failed, will retry...{W}')
+                    time.sleep(2)  # Brief pause before retry
+            
+            if not probe_success:
+                Color.pl('{!} {R}Failed to capture sufficient probe requests after {C}%d{W} attempts{W}' % max_probe_retries)
                 # Try fallback attack mode
                 Color.pl('{+} {O}Attempting fallback attack mode...{W}')
                 if not self.fallback_attack_mode():
@@ -1197,8 +1216,24 @@ class AttackKARMA(Attack):
             # Stage 2: Identify Real Networks with Clients
             if hasattr(self, 'target') and self.target:
                 Color.pattack('KARMA', self.target, 'Stage 2', 'Scanning for real networks')
-            if not self.identify_real_networks():
-                Color.pl('{!} {R}No real networks with clients found{W}')
+            
+            # Try network identification with retry mechanism
+            network_success = False
+            max_network_retries = 2
+            
+            for attempt in range(max_network_retries):
+                if attempt > 0:
+                    Color.pl('{+} {O}Retrying network scan (attempt {C}%d{W}/{C}%d{W})...{W}' % (attempt + 1, max_network_retries))
+                
+                if self.identify_real_networks():
+                    network_success = True
+                    break
+                elif attempt < max_network_retries - 1:
+                    Color.pl('{!} {O}Network scan failed, will retry...{W}')
+                    time.sleep(3)  # Brief pause before retry
+            
+            if not network_success:
+                Color.pl('{!} {R}No real networks with clients found after {C}%d{W} attempts{W}' % max_network_retries)
                 # Try fallback attack mode
                 Color.pl('{+} {O}Attempting fallback attack mode...{W}')
                 if not self.fallback_attack_mode():
@@ -1358,6 +1393,43 @@ class AttackKARMA(Attack):
                 
                 return False
     
+    def validate_selected_target(self):
+        """Validate that selected target appears in probe results"""
+        if not hasattr(self, 'target') or not self.target or not self.target.essid:
+            return True  # No target selected, proceed normally
+        
+        target_essid = self.target.essid
+        if target_essid in self.pnl_networks:
+            Color.pl('{+} {G}✓ Selected target {C}%s{W} found in probe requests{W}' % target_essid)
+            Color.pl('{+} {G}This means nearby devices are looking for this network{W}')
+            return True
+        else:
+            Color.pl('{!} {R}✗ Selected target {C}%s{W} NOT found in probe requests{W}' % target_essid)
+            Color.pl('{!} {O}This means no nearby devices are looking for this network{W}')
+            Color.pl('{!} {O}Possible reasons:{W}')
+            Color.pl('{!} {O}  - No devices have this network in their saved networks{W}')
+            Color.pl('{!} {O}  - Devices are not actively scanning for networks{W}')
+            Color.pl('{!} {O}  - Network name might be slightly different{W}')
+            Color.pl('{!} {O}  - Devices are on different channels{W}')
+            Color.pl('{!} {O}Attack will proceed with discovered networks instead{W}')
+            return False
+    
+    def handle_target_not_found(self):
+        """Handle case when selected target is not found with user options"""
+        if not hasattr(self, 'target') or not self.target or not self.target.essid:
+            return True  # No target selected, proceed normally
+        
+        Color.pl('{!} {R}Selected target not found in probe capture{W}')
+        Color.pl('{+} {C}Options:{W}')
+        Color.pl('{+} {C}1. Continue with discovered networks (recommended){W}')
+        Color.pl('{+} {C}2. Retry probe capture with longer timeout{W}')
+        Color.pl('{+} {C}3. Abort attack{W}')
+        
+        # For now, always continue with discovered networks (auto-mode)
+        # In GUI mode, this could be made interactive
+        Color.pl('{+} {G}Continuing with discovered networks (auto-mode){W}')
+        return True
+    
     def parse_probe_requests(self, capfile):
         """Parse probe requests from PCAP file using tshark"""
         if not Tshark.exists():
@@ -1440,8 +1512,13 @@ class AttackKARMA(Attack):
             return False
     
     def identify_real_networks(self):
-        """Identify real networks with active clients for deauth targeting"""
+        """Identify real networks with active clients for deauth targeting with enhanced validation"""
         Color.pl('\n{+} {C}Stage 2: Identifying real networks with active clients{W}')
+        
+        # Show user's selected target for reference
+        if hasattr(self, 'target') and self.target and self.target.essid:
+            Color.pl('{+} {C}Looking for real network: {G}%s{W}' % self.target.essid)
+            Color.pl('{+} {O}Note: Will scan for ALL networks with active clients{W}')
         
         try:
             # Use airodump to scan for networks with clients
@@ -1454,13 +1531,29 @@ class AttackKARMA(Attack):
                 
                 # Monitor progress and show updates
                 last_update = 0
+                target_found_in_scan = False
+                target_essid = getattr(self.target, 'essid', None) if hasattr(self, 'target') and self.target else None
+                
                 while not timer.ended() and self.running:
                     time.sleep(2)
                     
                     # Show progress every 5 seconds
                     if time.time() - last_update >= 5:
                         remaining = timer.remaining()
-                        Color.pl('{+} {C}Scanning... {O}%d{W} seconds remaining{W}' % remaining)
+                        progress_msg = '{+} {C}Scanning... {O}%d{W} seconds remaining{W}' % remaining
+                        
+                        # Check if target was found during scan
+                        targets = airodump.get_targets()
+                        for target in targets:
+                            if target.essid == target_essid and target.clients:
+                                target_found_in_scan = True
+                                progress_msg += ' {G}✓ Target found{W}'
+                                break
+                        
+                        if target_essid and not target_found_in_scan:
+                            progress_msg += ' {R}✗ Target not found{W}'
+                        
+                        Color.pl(progress_msg)
                         last_update = time.time()
                 
                 # Get discovered targets
@@ -1469,13 +1562,23 @@ class AttackKARMA(Attack):
                 
                 # Filter for networks with clients
                 networks_with_clients = []
+                target_network_found = False
+                
                 for target in targets:
                     if target.clients and target.essid_known and target.essid:
                         # Only target networks that have clients and known SSIDs
                         networks_with_clients.append(target)
                         self.real_networks.append(target)
-                        Color.pl('{+} {G}Found real network: {C}%s{W} ({C}%s{W}) with {G}%d{W} clients{W}' % 
-                                (target.essid, target.bssid, len(target.clients)))
+                        
+                        # Check if this is the user's target
+                        is_user_target = target_essid and target.essid == target_essid
+                        if is_user_target:
+                            target_network_found = True
+                            Color.pl('{+} {G}✓ Found user-selected target: {C}%s{W} ({C}%s{W}) with {G}%d{W} clients{W}' % 
+                                    (target.essid, target.bssid, len(target.clients)))
+                        else:
+                            Color.pl('{+} {G}Found real network: {C}%s{W} ({C}%s{W}) with {G}%d{W} clients{W}' % 
+                                    (target.essid, target.bssid, len(target.clients)))
                         
                         # Show clients
                         for client in target.clients:
@@ -1489,8 +1592,24 @@ class AttackKARMA(Attack):
                     for client in unassociated_target.clients:
                         Color.pl('  {G}* {W}Unassociated: {C}%s{W}' % client.station)
                 
+                # Validate target network was found
+                if target_essid and not target_network_found:
+                    Color.pl('{!} {R}✗ User-selected target {C}%s{W} not found in real networks{W}' % target_essid)
+                    Color.pl('{!} {O}Possible reasons:{W}')
+                    Color.pl('{!} {O}  - Network has no active clients currently{W}')
+                    Color.pl('{!} {O}  - Network is hidden (no SSID broadcast){W}')
+                    Color.pl('{!} {O}  - Network is on a different channel{W}')
+                    Color.pl('{!} {O}  - Network is temporarily offline{W}')
+                    Color.pl('{!} {O}  - Network name might be slightly different{W}')
+                
                 if self.real_networks:
                     Color.pl('{+} {G}Found {C}%d{W} real networks with clients for targeting{W}' % len(self.real_networks))
+                    
+                    # Show summary
+                    if target_network_found:
+                        Color.pl('{+} {G}✓ User-selected target will be prioritized{W}')
+                    else:
+                        Color.pl('{+} {O}⚠ User-selected target not found - will use best available network{W}')
                     
                     # GUI logging for phase completion
                     if hasattr(self, 'target') and self.target:
@@ -1504,6 +1623,15 @@ class AttackKARMA(Attack):
                     Color.pl('{!} {O}  - Clients are on different channels{W}')
                     Color.pl('{!} {O}  - Scan duration too short{W}')
                     Color.pl('{!} {O}  - Interface not properly configured{W}')
+                    Color.pl('{!} {O}  - All networks are hidden{W}')
+                    
+                    # Provide suggestions for improvement
+                    Color.pl('{!} {O}Suggestions to improve network detection:{W}')
+                    Color.pl('{!} {O}  - Increase scan duration{W}')
+                    Color.pl('{!} {O}  - Try scanning on different channels{W}')
+                    Color.pl('{!} {O}  - Move to area with more active devices{W}')
+                    Color.pl('{!} {O}  - Check interface configuration{W}')
+                    
                     return False
                     
         except Exception as e:
@@ -1515,7 +1643,7 @@ class AttackKARMA(Attack):
             return False
     
     def start_deauth_attack(self):
-        """Start adaptive deauthentication attack to force clients to disconnect"""
+        """Start adaptive deauthentication attack to force clients to disconnect with enhanced targeting"""
         Color.pl('\n{+} {C}Stage 4: Starting adaptive deauthentication attack{W}')
         
         try:
@@ -1527,6 +1655,21 @@ class AttackKARMA(Attack):
                 Color.pl('{!} {R}No real networks to target{W}')
                 return False
             
+            # Show targeting strategy
+            target_essid = getattr(self.target, 'essid', None) if hasattr(self, 'target') and self.target else None
+            target_network_found = False
+            
+            # Check if user's target is in real networks
+            for network in self.real_networks:
+                if target_essid and network.essid == target_essid:
+                    target_network_found = True
+                    break
+            
+            if target_network_found:
+                Color.pl('{+} {G}✓ User-selected target {C}%s{W} will be prioritized for deauth{W}' % target_essid)
+            elif target_essid:
+                Color.pl('{!} {O}⚠ User-selected target {C}%s{W} not found - will target available networks{W}' % target_essid)
+            
             Color.pl('{+} {C}Targeting {G}%d{W} real networks with adaptive deauth packets{W}' % len(self.real_networks))
             Color.pl('{+} {C}Attack will escalate intensity if clients don\'t connect{W}')
             
@@ -1535,6 +1678,13 @@ class AttackKARMA(Attack):
             for network in self.real_networks:
                 self.deauth_attempts[network.bssid] = 0
                 self.deauth_intensity[network.bssid] = 1  # Start with intensity 1
+                
+                # Prioritize user's target network
+                is_priority = target_essid and network.essid == target_essid
+                priority_marker = ' {G}[PRIORITY]{W}' if is_priority else ''
+                
+                Color.pl('{+} {C}Starting deauth attack on {G}%s{W} ({C}%s{W})%s{W}' % 
+                        (network.essid, network.bssid, priority_marker))
                 
                 thread = threading.Thread(target=self.adaptive_deauth_network_clients, args=(network,))
                 thread.daemon = True
@@ -1545,6 +1695,7 @@ class AttackKARMA(Attack):
                     Color.pattack('KARMA', self.target, 'Adaptive Deauth', f'Targeting {network.essid}')
             
             Color.pl('{+} {G}Adaptive deauthentication attack active - forcing clients to disconnect{W}')
+            Color.pl('{+} {C}Monitoring for client connections to rogue APs...{W}')
             return True
             
         except Exception as e:
@@ -2976,48 +3127,78 @@ class AttackKARMA(Attack):
                 Color.pl('{!} {O}User-selected target {G}%s{O} not found in scanned networks{W}' % user_target.essid)
                 Color.pl('{!} {O}Falling back to automatic network selection{W}')
             
-            # If user target not found or not specified, use original logic
+            # If user target not found or not specified, use enhanced scoring system
             Color.pl('{+} {C}Selecting best network automatically based on client activity and popularity{W}')
             
             for network in self.real_networks:
                 if not network.essid_known or not network.essid:
                     continue
                 
-                # Calculate score based on:
-                # 1. Number of clients (more clients = higher chance of saved passwords)
-                # 2. Network popularity (common names)
-                # 3. Signal strength (closer networks)
+                # Calculate score based on multiple factors
+                score = 0
                 
-                score = len(network.clients) * 10  # Base score from client count
+                # Factor 1: Number of clients (most important)
+                client_count = len(network.clients) if network.clients else 0
+                score += client_count * 10
                 
-                # Bonus for common network names
-                common_names = ['home', 'wifi', 'internet', 'router', 'network', 'linksys', 'netgear', 'tp-link']
+                # Factor 2: Network popularity (from probe requests)
+                if network.essid in self.pnl_networks:
+                    score += 5  # Bonus for networks found in probe requests
+                
+                # Factor 3: Network type preferences
                 essid_lower = network.essid.lower()
-                for common in common_names:
-                    if common in essid_lower:
-                        score += 5
-                        break
+                if any(keyword in essid_lower for keyword in ['home', 'wifi', 'internet', 'wireless']):
+                    score += 3  # Common network names
+                elif any(keyword in essid_lower for keyword in ['office', 'work', 'corp', 'company']):
+                    score += 2  # Business networks
+                elif any(keyword in essid_lower for keyword in ['guest', 'public', 'free']):
+                    score += 1  # Public networks
                 
-                # Bonus for strong signal (closer to 0 is better)
-                try:
-                    power = int(network.power)
-                    if power > -50:  # Very strong signal
-                        score += 3
-                    elif power > -70:  # Good signal
+                # Factor 4: Signal strength (if available)
+                if hasattr(network, 'power') and network.power:
+                    try:
+                        power_value = int(network.power.replace(' dBm', ''))
+                        if power_value > -50:  # Strong signal
+                            score += 2
+                        elif power_value > -70:  # Medium signal
+                            score += 1
+                    except:
+                        pass
+                
+                # Factor 5: Encryption type preference
+                if hasattr(network, 'encryption'):
+                    if 'WPA2' in network.encryption:
+                        score += 1  # Prefer WPA2 (most common)
+                    elif 'WPA' in network.encryption:
                         score += 1
-                except:
-                    pass
+                
+                Color.pl('{+} {C}Network {G}%s{W}: Score {C}%d{W} (Clients: {C}%d{W}, Popular: {C}%s{W}){W}' % 
+                        (network.essid, score, client_count, 'Yes' if network.essid in self.pnl_networks else 'No'))
                 
                 if score > max_score:
                     max_score = score
                     best_network = network
             
             if best_network:
-                Color.pl('{+} {C}Selected best network to clone: {G}%s{W} (Score: {C}%d{W})' % 
-                        (best_network.essid, max_score))
-                Color.pl('{+} {G}Selected network has {C}%d{W} clients{W}' % len(best_network.clients))
-            
-            return best_network
+                Color.pl('{+} {G}Selected best network: {C}%s{W} (Score: {C}%d{W}){W}' % (best_network.essid, max_score))
+                Color.pl('{+} {G}This network has {C}%d{W} clients and appears in probe requests{W}' % len(best_network.clients))
+                
+                # Show why this network was selected
+                reasons = []
+                if len(best_network.clients) > 0:
+                    reasons.append(f"{len(best_network.clients)} clients")
+                if best_network.essid in self.pnl_networks:
+                    reasons.append("found in probe requests")
+                if max_score > 10:
+                    reasons.append("high activity")
+                
+                if reasons:
+                    Color.pl('{+} {C}Selection reasons: {G}%s{W}' % ', '.join(reasons))
+                
+                return best_network
+            else:
+                Color.pl('{!} {R}No suitable networks found for cloning{W}')
+                return None
             
         except Exception as e:
             if Configuration.verbose > 1:

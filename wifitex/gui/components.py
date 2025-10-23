@@ -3386,39 +3386,24 @@ class AttackWorker(QThread):
             logger.error(f"Error creating target: {e}")
             return None
     
-    def _create_monitored_wps_attack(self, target, pixie_dust=False):
+    def _create_monitored_wps_attack(self, target, pixie_dust=False, default_pins=False):
         """Create a WPS attack with real-time output monitoring"""
         # Reaver, Bully, Configuration imported at top of file
         
         class MonitoredWPSAttack:
-            def __init__(self, target, pixie_dust, worker):
+            def __init__(self, target, pixie_dust, default_pins, worker):
                 self.target = target
                 self.pixie_dust = pixie_dust
+                self.default_pins = default_pins
                 self.worker = worker
                 self.success = False
                 self.crack_result = None
                 self.attack_thread = None
                 self.result = None
                 
-                # Choose the appropriate tool
-                reaver_cls = Reaver if Reaver is not None else None
-                bully_cls = Bully if Bully is not None else None
-                use_bully = bool(getattr(worker.Configuration, 'use_bully', False))
-                can_pixie = True
-                if reaver_cls is not None and hasattr(reaver_cls, 'is_pixiedust_supported'):
-                    try:
-                        can_pixie = reaver_cls.is_pixiedust_supported()
-                    except Exception:
-                        can_pixie = True
-                # Prefer Bully when requested or when Reaver pixie not supported
-                if bully_cls is not None and (
-                    (pixie_dust and not can_pixie) or use_bully
-                ):
-                    self.tool = bully_cls(target, pixie_dust=pixie_dust)
-                elif reaver_cls is not None:
-                    self.tool = reaver_cls(target, pixie_dust=pixie_dust)
-                elif bully_cls is not None:
-                    self.tool = bully_cls(target, pixie_dust=pixie_dust)
+                # Use the new AttackWPS class with optimized sequence
+                if worker.AttackWPS is not None:
+                    self.tool = worker.AttackWPS(target, pixie_dust=pixie_dust, default_pins=default_pins)
                 else:
                     self.tool = None
                 
@@ -3530,7 +3515,7 @@ class AttackWorker(QThread):
                     # Ignore errors when stopping
                     pass
         
-        return MonitoredWPSAttack(target, pixie_dust, self)
+        return MonitoredWPSAttack(target, pixie_dust, default_pins, self)
     
     def _run_auto_attack(self, target):
         """Run automatic attack using optimized attack sequence"""
@@ -3715,17 +3700,10 @@ class AttackWorker(QThread):
             # Prioritize attacks based on success probability and speed
             attack_sequence = []
             
-            # WPS attacks first (fastest and most effective)
+            # WPS attacks first (fastest and most effective) - now using optimized sequence
             if target.wps and self.AttackWPS is not None and self.AttackWPS.can_attack_wps():
-                if self.Configuration is not None:
-                    if self.Configuration.wps_pixie:
-                        attack_sequence.append(('WPS Pixie-Dust', lambda: self._run_wps_attack(target, pixie_dust=True)))
-                    if self.Configuration.wps_pin:
-                        attack_sequence.append(('WPS PIN', lambda: self._run_wps_attack(target, pixie_dust=False)))
-                else:
-                    # Default to both WPS attacks if Configuration is None
-                    attack_sequence.append(('WPS Pixie-Dust', lambda: self._run_wps_attack(target, pixie_dust=True)))
-                    attack_sequence.append(('WPS PIN', lambda: self._run_wps_attack(target, pixie_dust=False)))
+                # Use new optimized WPS attack sequence (Default PINs -> Pixie-Dust -> PIN Brute-force)
+                attack_sequence.append(('WPS Optimized', lambda: self._run_wps_attack(target, pixie_dust=False, default_pins=True)))
             
             # PMKID attack (fast, no client needed)
             if 'WPA' in target.encryption:
@@ -3872,10 +3850,17 @@ class AttackWorker(QThread):
                 'network': {'essid': target.essid, 'bssid': target.bssid}
             })
             
-    def _run_wps_attack(self, target, pixie_dust=False):
+    def _run_wps_attack(self, target, pixie_dust=False, default_pins=False):
         """Run WPS attack using monitored attack with real-time logging"""
         try:
-            attack_name = "WPS Pixie-Dust" if pixie_dust else "WPS PIN"
+            # Determine attack name based on parameters
+            if default_pins:
+                attack_name = "WPS Optimized (Default PINs -> Pixie-Dust -> PIN)"
+            elif pixie_dust:
+                attack_name = "WPS Pixie-Dust"
+            else:
+                attack_name = "WPS PIN"
+                
             self.attack_progress.emit({
                 'message': f'Starting {attack_name} attack on {target.essid}...',
                 'step': f'{attack_name} attack',
@@ -3884,7 +3869,7 @@ class AttackWorker(QThread):
             })
             
             # Use the monitored attack for real-time logging
-            attack = self._create_monitored_wps_attack(target, pixie_dust=pixie_dust)
+            attack = self._create_monitored_wps_attack(target, pixie_dust=pixie_dust, default_pins=default_pins)
             self.current_attack = attack
             result = attack.run()
             

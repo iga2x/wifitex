@@ -4,22 +4,6 @@
 from ..util.color import Color
 
 import re
-from typing import TYPE_CHECKING
-
-# Import custom exceptions with consistent typing for static analyzers
-if TYPE_CHECKING:
-    from ..gui.error_handler import ValidationError as GUIValidationError
-else:
-    try:
-        from ..gui.error_handler import ValidationError as GUIValidationError
-    except ImportError:
-        # Fallback for when GUI module is not available
-        class GUIValidationError(Exception):
-            pass
-
-# Always expose a module-local ValidationError with a consistent type
-class ValidationError(GUIValidationError):
-    pass
 
 
 class WPSState:
@@ -59,12 +43,14 @@ class Target(object):
         self.encryption =     fields[5].strip()
         if 'WPA' in self.encryption:
             self.encryption = 'WPA'
+        elif 'WEP' in self.encryption:
+            self.encryption = 'WEP'
         if len(self.encryption) > 4:
             self.encryption = self.encryption[0:4].strip()
 
         self.power      = int(fields[8].strip())
-        # Keep power values as-is (negative dBm values are correct)
-        # Do not add 100 to negative values - this was causing incorrect signal strength display
+        if self.power < 0:
+            self.power += 100
 
         self.beacons    = int(fields[9].strip())
         self.ivs        = int(fields[10].strip())
@@ -90,20 +76,16 @@ class Target(object):
     def validate(self):
         ''' Checks that the target is valid. '''
         if self.channel == '-1':
-            raise ValidationError('Ignoring target with Negative-One (-1) channel')
+            raise Exception('Ignoring target with Negative-One (-1) channel')
 
-        # Skip validation for unassociated clients target
-        if self.bssid == 'UNASSOCIATED':
-            return
-
-        # Filter broadcast/multicast BSSIDs, see https://github.com/iga2x/wifitex/issues/32
+        # Filter broadcast/multicast BSSIDs, see https://github.com/derv82/wifite2/issues/32
         bssid_broadcast = re.compile(r'^(ff:ff:ff:ff:ff:ff|00:00:00:00:00:00)$', re.IGNORECASE)
         if bssid_broadcast.match(self.bssid):
-            raise ValidationError('Ignoring target with Broadcast BSSID (%s)' % self.bssid)
+            raise Exception('Ignoring target with Broadcast BSSID (%s)' % self.bssid)
 
         bssid_multicast = re.compile(r'^(01:00:5e|01:80:c2|33:33)', re.IGNORECASE)
         if bssid_multicast.match(self.bssid):
-            raise ValidationError('Ignoring target with Multicast BSSID (%s)' % self.bssid)
+            raise Exception('Ignoring target with Multicast BSSID (%s)' % self.bssid)
 
     def to_str(self, show_bssid=False):
         '''
@@ -114,10 +96,10 @@ class Target(object):
         max_essid_len = 24
         essid = self.essid if self.essid_known else '(%s)' % self.bssid
         # Trim ESSID (router name) if needed
-        if essid and len(essid) > max_essid_len:
+        if len(essid) > max_essid_len:
             essid = essid[0:max_essid_len-3] + '...'
         else:
-            essid = essid.rjust(max_essid_len) if essid else '(%s)' % self.bssid
+            essid = essid.rjust(max_essid_len)
 
         if self.essid_known:
             # Known ESSID
@@ -141,7 +123,9 @@ class Target(object):
         channel = Color.s('%s%s' % (channel_color, str(self.channel).rjust(3)))
 
         encryption = self.encryption.rjust(4)
-        if 'WPA' in encryption:
+        if 'WEP' in encryption:
+            encryption = Color.s('{G}%s' % encryption)
+        elif 'WPA' in encryption:
             encryption = Color.s('{O}%s' % encryption)
 
         power = '%sdb' % str(self.power).rjust(3)

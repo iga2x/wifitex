@@ -6,7 +6,7 @@ from .util.color import Color
 import argparse, sys
 
 class Arguments(object):
-    ''' Holds arguments used by the Wifitex '''
+    ''' Holds arguments used by the Wifite '''
 
     def __init__(self, configuration):
         # Hack: Check for -v before parsing args; so we know which commands to display.
@@ -23,48 +23,16 @@ class Arguments(object):
     def get_arguments(self):
         ''' Returns parser.args() containing all program arguments '''
 
-        # Custom help formatter that includes banner
-        class CustomHelpFormatter(argparse.HelpFormatter):
-            def __init__(self, prog, config):
-                super().__init__(prog, max_help_position=80, width=130)
-                self.config = config
-                
-            def format_help(self):
-                # Get version safely
-                try:
-                    version = self.config.version
-                except:
-                    version = "2.7.0"
-                
-                # Create banner
-                banner = Color.s(r' {G}  .     {GR}{D}     {W}{G}     .    {W}') + '\n'
-                banner += Color.s(r' {G}.´  ·  .{GR}{D}     {W}{G}.  ·  `.  {G}wifitex {D}%s{W}' % version) + '\n'
-                banner += Color.s(r' {G}:  :  : {GR}{D} (¯) {W}{G} :  :  :  {W}{D}automated wireless auditor{W}') + '\n'
-                banner += Color.s(r' {G}`.  ·  `{GR}{D} /¯\ {W}{G}´  ·  .´  {C}{D}https://github.com/iga2x/wifitex{W}') + '\n'
-                banner += Color.s(r' {G}  `     {GR}{D}/¯¯¯\{W}{G}     ´    {W}') + '\n\n'
-                
-                # Add GUI mode section
-                gui_section = Color.s('{C}GUI MODE{W}:') + '\n'
-                gui_section += '  --gui                            Launch graphical user interface\n\n'
-                
-                # Add note about WEP
-                note = Color.s('{O}Note: wifiteX focuses on modern wireless security testing (WPA/WPA2/WPS/KARMA).') + '\n'
-                note += Color.s('{O}WEP attacks are not implemented as WEP was deprecated in 2004.{W}') + '\n\n'
-                
-                # Get standard help
-                help_text = super().format_help()
-                
-                return banner + help_text + '\n' + gui_section + note
-
         parser = argparse.ArgumentParser(usage=argparse.SUPPRESS,
-                formatter_class=lambda prog: CustomHelpFormatter(prog, self.config))
+                formatter_class=lambda prog: argparse.HelpFormatter(
+                    prog, max_help_position=80, width=130))
 
         self._add_global_args(parser.add_argument_group(Color.s('{C}SETTINGS{W}')))
+        self._add_wep_args(parser.add_argument_group(Color.s('{C}WEP{W}')))
         self._add_wpa_args(parser.add_argument_group(Color.s('{C}WPA{W}')))
         self._add_wps_args(parser.add_argument_group(Color.s('{C}WPS{W}')))
         self._add_pmkid_args(parser.add_argument_group(Color.s('{C}PMKID{W}')))
         self._add_eviltwin_args(parser.add_argument_group(Color.s('{C}EVIL TWIN{W}')))
-        self._add_karma_args(parser.add_argument_group(Color.s('{C}KARMA{W}')))
         self._add_command_args(parser.add_argument_group(Color.s('{C}COMMANDS{W}')))
 
         return parser.parse_args()
@@ -188,8 +156,6 @@ class Arguments(object):
 
 
     def _add_eviltwin_args(self, group):
-        # INACTIVE: Evil Twin functionality is kept as reference but not implemented
-        # KARMA attack provides enhanced Evil Twin functionality with PNL capture
         pass
         '''
         group.add_argument('--eviltwin',
@@ -200,48 +166,124 @@ class Arguments(object):
         # TODO: Args to specify deauth interface, server port, etc.
         '''
 
-    def _add_karma_args(self, group):
-        group.add_argument('--karma',
+
+    def _add_wep_args(self, wep):
+        # WEP
+        wep.add_argument('--wep',
             action='store_true',
-            dest='use_karma',
-            help=Color.s('Use {G}KARMA attack{W} (enhanced Evil Twin with PNL capture) ' +
+            dest='wep_filter',
+            help=Color.s('Show only {C}WEP-encrypted networks{W}'))
+        wep.add_argument('-wep', help=argparse.SUPPRESS, action='store_true',
+                dest='wep_filter')
+
+        wep.add_argument('--require-fakeauth',
+            action='store_true',
+            dest='require_fakeauth',
+            help=Color.s('Fails attacks if {C}fake-auth{W} fails (default: {G}off{W})'))
+        wep.add_argument('--nofakeauth', help=argparse.SUPPRESS, action='store_true',
+                dest='require_fakeauth')
+        wep.add_argument('-nofakeauth', help=argparse.SUPPRESS, action='store_true',
+                dest='require_fakeauth')
+
+        wep.add_argument('--keep-ivs',
+            action='store_true',
+            dest='wep_keep_ivs',
+            default=False,
+            help=Color.s('Retain .IVS files and reuse when cracking ' +
                 '(default: {G}off{W})'))
-        
-        group.add_argument('--karma-probe-timeout',
+
+        wep.add_argument('--pps',
             action='store',
-            dest='karma_probe_timeout',
+            dest='wep_pps',
+            metavar='[pps]',
             type=int,
+            help=self._verbose('Packets-per-second to replay (default: ' +
+                '{G}%d pps{W})' % self.config.wep_pps))
+        wep.add_argument('-pps', help=argparse.SUPPRESS, action='store',
+                dest='wep_pps', type=int)
+
+        wep.add_argument('--wept',
+            action='store',
+            dest='wep_timeout',
             metavar='[seconds]',
-            help=Color.s('Time to capture probe requests for PNL before starting attack ' +
-                '(default: {G}30{W} seconds)'))
-        
-        group.add_argument('--karma-rogue-iface',
-            action='store',
-            dest='karma_rogue_interface',
-            metavar='[interface]',
-            help=Color.s('Wireless interface to use for rogue AP ' +
-                '(default: {G}same as scan interface{W})'))
-        
-        group.add_argument('--karma-probe-iface',
-            action='store',
-            dest='karma_probe_interface',
-            metavar='[interface]',
-            help=Color.s('Wireless interface to use for capturing probe requests ' +
-                '(default: {G}same as scan interface{W})'))
-        
-        group.add_argument('--karma-min-probes',
-            action='store',
-            dest='karma_min_probes',
             type=int,
-            metavar='[number]',
-            help=Color.s('Minimum number of probe requests to capture before starting attack ' +
-                '(default: {G}3{W})'))
-        
-        group.add_argument('--karma-all-channels',
+            help=self._verbose('Seconds to wait before failing (default: ' +
+                '{G}%d sec{W})' % self.config.wep_timeout))
+        wep.add_argument('-wept', help=argparse.SUPPRESS, action='store',
+                dest='wep_timeout', type=int)
+
+        wep.add_argument('--wepca',
+            action='store',
+            dest='wep_crack_at_ivs',
+            metavar='[ivs]',
+            type=int,
+            help=self._verbose('Start cracking at this many IVs (default: ' +
+                '{G}%d ivs{W})' % self.config.wep_crack_at_ivs))
+        wep.add_argument('-wepca', help=argparse.SUPPRESS, action='store',
+                dest='wep_crack_at_ivs', type=int)
+
+        wep.add_argument('--weprs',
+            action='store',
+            dest='wep_restart_stale_ivs',
+            metavar='[seconds]',
+            type=int,
+            help=self._verbose('Restart aireplay if no new IVs appear (default: ' +
+                '{G}%d sec{W})' % self.config.wep_restart_stale_ivs))
+        wep.add_argument('-weprs', help=argparse.SUPPRESS, action='store',
+                dest='wep_restart_stale_ivs', type=int)
+
+        wep.add_argument('--weprc',
+            action='store',
+            dest='wep_restart_aircrack',
+            metavar='[seconds]',
+            type=int,
+            help=self._verbose('Restart aircrack after this delay (default: ' +
+                '{G}%d sec{W})' % self.config.wep_restart_aircrack))
+        wep.add_argument('-weprc', help=argparse.SUPPRESS, action='store',
+                dest='wep_restart_aircrack', type=int)
+
+        wep.add_argument('--arpreplay',
             action='store_true',
-            dest='karma_capture_all_channels',
-            help=Color.s('Capture probe requests from all channels ' +
-                '(default: {G}current channel only{W})'))
+            dest='wep_attack_replay',
+            help=self._verbose('Use {C}ARP-replay{W} WEP attack (default: {G}on{W})'))
+        wep.add_argument('-arpreplay', help=argparse.SUPPRESS, action='store_true',
+                dest='wep_attack_replay')
+
+        wep.add_argument('--fragment',
+            action='store_true',
+            dest='wep_attack_fragment',
+            help=self._verbose('Use {C}fragmentation{W} WEP attack (default: {G}on{W})'))
+        wep.add_argument('-fragment', help=argparse.SUPPRESS, action='store_true',
+                dest='wep_attack_fragment')
+
+        wep.add_argument('--chopchop',
+            action='store_true',
+            dest='wep_attack_chopchop',
+            help=self._verbose('Use {C}chop-chop{W} WEP attack (default: {G}on{W})'))
+        wep.add_argument('-chopchop', help=argparse.SUPPRESS, action='store_true',
+                dest='wep_attack_chopchop')
+
+        wep.add_argument('--caffelatte',
+            action='store_true',
+            dest='wep_attack_caffe',
+            help=self._verbose('Use {C}caffe-latte{W} WEP attack (default: {G}on{W})'))
+        wep.add_argument('-caffelatte', help=argparse.SUPPRESS, action='store_true',
+                dest='wep_attack_caffelatte')
+
+        wep.add_argument('--p0841',
+            action='store_true',
+            dest='wep_attack_p0841',
+            help=self._verbose('Use {C}p0841{W} WEP attack (default: {G}on{W})'))
+        wep.add_argument('-p0841', help=argparse.SUPPRESS, action='store_true',
+                dest='wep_attack_p0841')
+
+        wep.add_argument('--hirte',
+            action='store_true',
+            dest='wep_attack_hirte',
+            help=self._verbose('Use {C}hirte{W} WEP attack (default: {G}on{W})'))
+        wep.add_argument('-hirte', help=argparse.SUPPRESS, action='store_true',
+                dest='wep_attack_hirte')
+
 
     def _add_wpa_args(self, wpa):
         wpa.add_argument('--wpa',
@@ -334,14 +376,6 @@ class Arguments(object):
         wps.add_argument('--no-pixie', action='store_true', dest='wps_no_pixie',
             help=self._verbose('{O}Never{W} use {O}WPS Pixie-Dust{W} attack ' +
                 '(use {G}PIN attack{W})'))
-
-        wps.add_argument('--default-pins', action='store_true', dest='wps_default_pins',
-            help=self._verbose('{G}Try{W} common default WPS PINs first ' +
-                '(fastest attack method, default: {G}on{W})'))
-
-        wps.add_argument('--no-default-pins', action='store_true', dest='wps_no_default_pins',
-            help=self._verbose('{O}Skip{W} default PIN attack ' +
-                '(go directly to Pixie-Dust/PIN brute-force)'))
 
         wps.add_argument('--bully',
             action='store_true',

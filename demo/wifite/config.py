@@ -2,20 +2,18 @@
 # -*- coding: utf-8 -*-
 
 import os
-import logging
 
 from .util.color import Color
 from .tools.macchanger import Macchanger
 
 class Configuration(object):
-    ''' Stores configuration variables and functions for Wifitex. '''
-    version = '2.7.0'
+    ''' Stores configuration variables and functions for Wifite. '''
+    version = '2.2.5'
 
     initialized = False # Flag indicating config has been initialized
     temp_dir = None     # Temporary directory
     interface = None
     verbose = 0
-    logger = None       # Logger instance
 
     @classmethod
     def initialize(cls, load_interface=True):
@@ -30,10 +28,6 @@ class Configuration(object):
         if cls.initialized:
             return
         cls.initialized = True
-        
-        # Setup logging
-        cls.logger = logging.getLogger('wifitex.config')
-        cls.logger.debug("Initializing Wifitex configuration")
 
         cls.verbose = 0 # Verbosity of output. Higher number means more debug info about running processes.
         cls.print_stack_traces = True
@@ -55,7 +49,7 @@ class Configuration(object):
         cls.no_deauth = False # Deauth hidden networks & WPA handshake targets
         cls.num_deauths = 1 # Number of deauth packets to send to each target.
 
-        cls.encryption_filter = ['WPA', 'WPS']
+        cls.encryption_filter = ['WEP', 'WPA', 'WPS']
 
         # EvilTwin variables
         cls.use_eviltwin = False
@@ -63,17 +57,19 @@ class Configuration(object):
         cls.eviltwin_deauth_iface = None
         cls.eviltwin_fakeap_iface = None
 
-        # KARMA Attack variables
-        cls.use_karma = False
-        cls.karma_probe_timeout = 30  # Time to capture probe requests (seconds)
-        cls.karma_rogue_interface = None  # Interface for rogue AP
-        cls.karma_probe_interface = None  # Interface for capturing probe requests
-        cls.karma_auto_connect = True  # Enable automatic victim connection
-        cls.karma_capture_all_channels = False  # Capture probes from all channels
-        cls.karma_min_probes = 3  # Minimum number of probe requests to capture before starting attack
-        cls.karma_dns_spoofing = False  # Enable DNS spoofing for Layer 7 attacks (disabled by default)
-
-        # WPA/WPA2/WPA3 variables
+        # WEP variables
+        cls.wep_filter = False # Only attack WEP networks
+        cls.wep_pps = 600 # Packets per second
+        cls.wep_timeout = 600 # Seconds to wait before failing
+        cls.wep_crack_at_ivs = 10000 # Minimum IVs to start cracking
+        cls.require_fakeauth = False
+        cls.wep_restart_stale_ivs = 11 # Seconds to wait before restarting
+                                                 # Aireplay if IVs don't increaes.
+                                                 # '0' means never restart.
+        cls.wep_restart_aircrack = 30  # Seconds to give aircrack to crack
+                                                 # before restarting the process.
+        cls.wep_crack_at_ivs = 10000   # Number of IVS to start cracking
+        cls.wep_keep_ivs = False       # Retain .ivs files across multiple attacks.
 
         # WPA variables
         cls.wpa_filter = False # Only attack WPA networks
@@ -85,58 +81,36 @@ class Configuration(object):
 
         # PMKID variables
         cls.use_pmkid_only = False  # Only use PMKID Capture+Crack attack
-        cls.pmkid_timeout = 60  # Time to wait for PMKID capture (increased from 30)
+        cls.pmkid_timeout = 30  # Time to wait for PMKID capture
 
         # Default dictionary for cracking
         cls.cracked_file = 'cracked.txt'
         cls.wordlist = None
-        # Use dynamic wordlist detection from GUI path_utils
-        try:
-            from .gui.path_utils import get_wordlist_path, find_system_wordlists
-            cls.wordlist = get_wordlist_path()
-            if not cls.wordlist:
-                # Fallback to system wordlists
-                system_wordlists = find_system_wordlists()
-                if system_wordlists:
-                    for wlist in system_wordlists:
-                        if os.path.exists(wlist):
-                            cls.wordlist = wlist
-                            break
-        except ImportError:
-            # Fallback to original hardcoded paths if GUI module not available
-            wordlists = [
-                './wordlist-top4800-probable.txt',  # Local file (ran from cloned repo)
-                '/usr/share/dict/wordlist-top4800-probable.txt',  # setup.py with prefix=/usr
-                '/usr/local/share/dict/wordlist-top4800-probable.txt',  # setup.py with prefix=/usr/local
-                # Other passwords found on Kali
-                '/usr/share/wfuzz/wordlist/fuzzdb/wordlists-user-passwd/passwds/phpbb.txt',
-                '/usr/share/fuzzdb/wordlists-user-passwd/passwds/phpbb.txt',
-                '/usr/share/wordlists/fern-wifi/common.txt'
-            ]
-            for wlist in wordlists:
-                if os.path.exists(wlist):
-                    cls.wordlist = wlist
-                    break
-
-        # Cracking tool preferences (used by GUI and CLI)
-        # Auto-detect GPU and set preferences accordingly
-        cls._detect_and_set_cracking_preferences()
+        wordlists = [
+            './wordlist-top4800-probable.txt',  # Local file (ran from cloned repo)
+            '/usr/share/dict/wordlist-top4800-probable.txt',  # setup.py with prefix=/usr
+            '/usr/local/share/dict/wordlist-top4800-probable.txt',  # setup.py with prefix=/usr/local
+            # Other passwords found on Kali
+            '/usr/share/wfuzz/wordlist/fuzzdb/wordlists-user-passwd/passwds/phpbb.txt',
+            '/usr/share/fuzzdb/wordlists-user-passwd/passwds/phpbb.txt',
+            '/usr/share/wordlists/fern-wifi/common.txt'
+        ]
+        for wlist in wordlists:
+            if os.path.exists(wlist):
+                cls.wordlist = wlist
+                break
 
         # WPS variables
         cls.wps_filter  = False  # Only attack WPS networks
         cls.no_wps      = False  # Do not use WPS attacks (Pixie-Dust & PIN attacks)
-        cls.wps_only    = False  # ONLY use WPS attacks
+        cls.wps_only    = False  # ONLY use WPS attacks on non-WEP networks
         cls.use_bully   = False  # Use bully instead of reaver
         cls.wps_pixie   = True
         cls.wps_pin     = True
-        cls.wps_default_pins = True  # Try common default PINs first (new feature)
         cls.wps_ignore_lock = False  # Skip WPS PIN attack if AP is locked.
         cls.wps_pixie_timeout = 300      # Seconds to wait for PIN before WPS Pixie attack fails
-        cls.wps_pin_timeout = 1800       # Seconds to wait for PIN attack (30 minutes)
-        cls.wps_default_pin_timeout = 30  # Seconds to wait for each default PIN attempt
         cls.wps_fail_threshold = 100     # Max number of failures
         cls.wps_timeout_threshold = 100  # Max number of timeouts
-        cls.wps_use_standalone_pixiewps = True  # Use standalone pixiewps as fallback
 
         # Commands
         cls.show_cracked = False
@@ -153,30 +127,10 @@ class Configuration(object):
     @classmethod
     def get_monitor_mode_interface(cls):
         if cls.interface is None:
-            # Interface wasn't defined, use interactive selection
+            # Interface wasn't defined, select it!
             from .tools.airmon import Airmon
-            
-            try:
-                # Always use interactive selection for CLI
-                cls.interface = Airmon.ask()
-            except Exception as e:
-                # If interactive selection fails, try to use a default interface
-                import subprocess
-                try:
-                    result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0:
-                        # Extract first interface from iwconfig output
-                        lines = result.stdout.split('\n')
-                        for line in lines:
-                            if line and not line.startswith(' ') and ':' in line:
-                                interface = line.split(':')[0].strip()
-                                if interface and interface.startswith('wlan'):
-                                    cls.interface = interface
-                                    break
-                except:
-                    pass
-            
-            if cls.random_mac and cls.interface:
+            cls.interface = Airmon.ask()
+            if cls.random_mac:
                 Macchanger.random()
 
     @classmethod
@@ -186,14 +140,20 @@ class Configuration(object):
 
         args = Arguments(cls).args
         cls.parse_settings_args(args)
+        cls.parse_wep_args(args)
         cls.parse_wpa_args(args)
         cls.parse_wps_args(args)
         cls.parse_pmkid_args(args)
-        cls.parse_karma_args(args)
         cls.parse_encryption()
 
-        # Note: EvilTwin functionality has been replaced by KARMA attack
-        # which provides enhanced Evil Twin functionality with PNL capture
+        # EvilTwin
+        '''
+        if args.use_eviltwin:
+            cls.use_eviltwin = True
+            Color.pl('{+} {C}option:{W} using {G}eviltwin attacks{W} against all targets')
+        '''
+
+        cls.parse_wep_attacks()
 
         cls.validate()
 
@@ -280,6 +240,46 @@ class Configuration(object):
 
 
     @classmethod
+    def parse_wep_args(cls, args):
+        '''Parses WEP-specific arguments'''
+        if args.wep_filter:
+            cls.wep_filter = args.wep_filter
+
+        if args.wep_pps:
+            cls.wep_pps = args.wep_pps
+            Color.pl('{+} {C}option:{W} using {G}%d{W} packets/sec on WEP attacks' % (
+                args.wep_pps))
+
+        if args.wep_timeout:
+            cls.wep_timeout = args.wep_timeout
+            Color.pl('{+} {C}option:{W} WEP attack timeout set to ' +
+                '{G}%d seconds{W}' % args.wep_timeout)
+
+        if args.require_fakeauth:
+            cls.require_fakeauth = True
+            Color.pl('{+} {C}option:{W} fake-authentication is ' +
+                '{G}required{W} for WEP attacks')
+
+        if args.wep_crack_at_ivs:
+            cls.wep_crack_at_ivs = args.wep_crack_at_ivs
+            Color.pl('{+} {C}option:{W} will start cracking WEP keys at ' +
+                '{G}%d IVs{W}' % args.wep_crack_at_ivs)
+
+        if args.wep_restart_stale_ivs:
+            cls.wep_restart_stale_ivs = args.wep_restart_stale_ivs
+            Color.pl('{+} {C}option:{W} will restart aireplay after ' +
+                '{G}%d seconds{W} of no new IVs' % args.wep_restart_stale_ivs)
+
+        if args.wep_restart_aircrack:
+            cls.wep_restart_aircrack = args.wep_restart_aircrack
+            Color.pl('{+} {C}option:{W} will restart aircrack every ' +
+                '{G}%d seconds{W}' % args.wep_restart_aircrack)
+
+        if args.wep_keep_ivs:
+            cls.wep_keep_ivs = args.wep_keep_ivs
+            Color.pl('{+} {C}option:{W} keep .ivs files across multiple WEP attacks')
+
+    @classmethod
     def parse_wpa_args(cls, args):
         '''Parses WPA-specific arguments'''
         if args.wpa_filter:
@@ -288,13 +288,13 @@ class Configuration(object):
         if args.wordlist:
             if not os.path.exists(args.wordlist):
                 cls.wordlist = None
-                Color.pl('{+} {C}option:{O} wordlist {R}%s{O} was not found, wifitex will NOT attempt to crack handshakes' % args.wordlist)
+                Color.pl('{+} {C}option:{O} wordlist {R}%s{O} was not found, wifite will NOT attempt to crack handshakes' % args.wordlist)
             elif os.path.isfile(args.wordlist):
                 cls.wordlist = args.wordlist
                 Color.pl('{+} {C}option:{W} using wordlist {G}%s{W} to crack WPA handshakes' % args.wordlist)
             elif os.path.isdir(args.wordlist):
                 cls.wordlist = None
-                Color.pl('{+} {C}option:{O} wordlist {R}%s{O} is a directory, not a file. Wifitex will NOT attempt to crack handshakes' % args.wordlist)
+                Color.pl('{+} {C}option:{O} wordlist {R}%s{O} is a directory, not a file. Wifite will NOT attempt to crack handshakes' % args.wordlist)
 
         if args.wpa_deauth_timeout:
             cls.wpa_deauth_timeout = args.wpa_deauth_timeout
@@ -394,44 +394,52 @@ class Configuration(object):
             Color.pl('{+} {C}option:{W} will wait {G}%d seconds{W} during {C}PMKID{W} capture' % args.pmkid_timeout)
 
     @classmethod
-    def parse_karma_args(cls, args):
-        '''Parses KARMA attack-specific arguments'''
-        if hasattr(args, 'use_karma') and args.use_karma:
-            cls.use_karma = True
-            Color.pl('{+} {C}option:{W} using {G}KARMA attack{W} (enhanced Evil Twin with PNL capture)')
-
-        if hasattr(args, 'karma_probe_timeout') and args.karma_probe_timeout:
-            cls.karma_probe_timeout = args.karma_probe_timeout
-            Color.pl('{+} {C}option:{W} will capture probe requests for {G}%d seconds{W} before starting KARMA attack' % args.karma_probe_timeout)
-
-        if hasattr(args, 'karma_rogue_interface') and args.karma_rogue_interface:
-            cls.karma_rogue_interface = args.karma_rogue_interface
-            Color.pl('{+} {C}option:{W} using {G}%s{W} as rogue AP interface' % args.karma_rogue_interface)
-
-        if hasattr(args, 'karma_probe_interface') and args.karma_probe_interface:
-            cls.karma_probe_interface = args.karma_probe_interface
-            Color.pl('{+} {C}option:{W} using {G}%s{W} as probe capture interface' % args.karma_probe_interface)
-
-        if hasattr(args, 'karma_min_probes') and args.karma_min_probes:
-            cls.karma_min_probes = args.karma_min_probes
-            Color.pl('{+} {C}option:{W} will capture minimum {G}%d probe requests{W} before starting attack' % args.karma_min_probes)
-
-    @classmethod
     def parse_encryption(cls):
-        '''Adjusts encryption filter (WPA and/or WPS)'''
+        '''Adjusts encryption filter (WEP and/or WPA and/or WPS)'''
         cls.encryption_filter = []
+        if cls.wep_filter: cls.encryption_filter.append('WEP')
         if cls.wpa_filter: cls.encryption_filter.append('WPA')
         if cls.wps_filter: cls.encryption_filter.append('WPS')
 
-        if len(cls.encryption_filter) == 2:
+        if len(cls.encryption_filter) == 3:
             Color.pl('{+} {C}option:{W} targeting {G}all encrypted networks{W}')
         elif len(cls.encryption_filter) == 0:
             # Default to scan all types
-            cls.encryption_filter = ['WPA', 'WPS']
+            cls.encryption_filter = ['WEP', 'WPA', 'WPS']
         else:
             Color.pl('{+} {C}option:{W} ' +
                      'targeting {G}%s-encrypted{W} networks'
                         % '/'.join(cls.encryption_filter))
+
+    @classmethod
+    def parse_wep_attacks(cls):
+        '''Parses and sets WEP-specific args (-chopchop, -fragment, etc)'''
+        cls.wep_attacks = []
+        from sys import argv
+        seen = set()
+        for arg in argv:
+            if arg in seen: continue
+            seen.add(arg)
+            if arg == '-arpreplay':  cls.wep_attacks.append('replay')
+            if arg == '-fragment':   cls.wep_attacks.append('fragment')
+            if arg == '-chopchop':   cls.wep_attacks.append('chopchop')
+            if arg == '-caffelatte': cls.wep_attacks.append('caffelatte')
+            if arg == '-p0841':      cls.wep_attacks.append('p0841')
+            if arg == '-hirte':      cls.wep_attacks.append('hirte')
+
+        if len(cls.wep_attacks) == 0:
+            # Use all attacks
+            cls.wep_attacks = ['replay',
+                'fragment',
+                'chopchop',
+                'caffelatte',
+                'p0841',
+                'hirte'
+            ]
+        elif len(cls.wep_attacks) > 0:
+            Color.pl('{+} {C}option:{W} using {G}%s{W} WEP attacks'
+                % '{W}, {G}'.join(cls.wep_attacks))
+
 
     @classmethod
     def temp(cls, subfile=''):
@@ -444,51 +452,10 @@ class Configuration(object):
     def create_temp():
         ''' Creates and returns a temporary directory '''
         from tempfile import mkdtemp
-        tmp = mkdtemp(prefix='wifitex')
+        tmp = mkdtemp(prefix='wifite')
         if not tmp.endswith(os.sep):
             tmp += os.sep
         return tmp
-
-    @classmethod
-    def _detect_and_set_cracking_preferences(cls):
-        '''Auto-detect GPU availability and set cracking tool preferences'''
-        try:
-            from .tools.hashcat import Hashcat
-            from .tools.aircrack import Aircrack
-            
-            # Check if hashcat is available
-            hashcat_available = Hashcat.exists()
-            aircrack_available = Aircrack.exists()
-            
-            if hashcat_available:
-                # Check for GPU support
-                has_gpu = Hashcat.has_gpu()
-                
-                if has_gpu:
-                    # GPU available - prefer hashcat for speed
-                    cls.prefer_hashcat = True
-                    cls.prefer_aircrack = False
-                    if hasattr(cls, 'logger') and cls.logger:
-                        cls.logger.debug("GPU detected - preferring hashcat for faster cracking")
-                else:
-                    # No GPU - prefer aircrack-ng (more reliable)
-                    cls.prefer_hashcat = False
-                    cls.prefer_aircrack = True
-                    if hasattr(cls, 'logger') and cls.logger:
-                        cls.logger.debug("No GPU detected - preferring aircrack-ng")
-            else:
-                # Hashcat not available - use aircrack-ng
-                cls.prefer_hashcat = False
-                cls.prefer_aircrack = True
-                if hasattr(cls, 'logger') and cls.logger:
-                    cls.logger.debug("Hashcat not available - using aircrack-ng")
-                
-        except ImportError:
-            # Fallback if tools not available
-            cls.prefer_hashcat = False
-            cls.prefer_aircrack = True
-            if hasattr(cls, 'logger') and cls.logger:
-                cls.logger.debug("Tools not available - defaulting to aircrack-ng")
 
     @classmethod
     def delete_temp(cls):
