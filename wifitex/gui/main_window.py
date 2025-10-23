@@ -1151,7 +1151,7 @@ class WifitexMainWindow(QMainWindow):
                 color = "⚫"   # Black
                 proximity = "Very Far"
                 
-            return f"{essid}\n{color} {bars} ({power}dBm) - {proximity}"
+            return f"{essid}\n{color} {bars} ({power:+d}dBm) - {proximity}"
         except:
             return f"{essid}\n❓ Unknown Signal"
     

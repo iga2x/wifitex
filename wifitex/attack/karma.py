@@ -1278,8 +1278,13 @@ class AttackKARMA(Attack):
                 pass
     
     def capture_probe_requests(self):
-        """Capture probe requests to extract PNL"""
-        Color.pl('\n{+} {C}Phase 1: Capturing probe requests to extract PNL{W}')
+        """Capture probe requests to extract PNL with enhanced target validation"""
+        Color.pl('\n{+} {C}Stage 1: Capturing probe requests to extract PNL{W}')
+        
+        # Show user's selected target for reference
+        if hasattr(self, 'target') and self.target and self.target.essid:
+            Color.pl('{+} {C}Looking for probe requests targeting: {G}%s{W}' % self.target.essid)
+            Color.pl('{+} {O}Note: KARMA will capture ALL probe requests, not just your target{W}')
         
         # Use airodump to capture probe requests (without -a flag to capture all frames)
         with Airodump(interface=self.probe_interface, 
@@ -1291,16 +1296,32 @@ class AttackKARMA(Attack):
             timer = Timer(probe_timeout)
             Color.pl('{+} {C}Capturing probe requests for {G}%d{W} seconds...' % probe_timeout)
             
+            # Track target-specific probes
+            target_probes_found = 0
+            target_essid = getattr(self.target, 'essid', None) if hasattr(self, 'target') and self.target else None
+            
             while not timer.ended() and self.running:
                 # Parse captured packets for probe requests
                 cap_files = airodump.find_files(endswith='.cap')
                 if cap_files:
                     self.parse_probe_requests(cap_files[0])
                 
-                # Show progress
+                # Check if target was found in probes
+                if target_essid and target_essid in self.pnl_networks:
+                    target_probes_found += 1
+                
+                # Show progress with target validation
                 if len(self.pnl_networks) > 0:
                     Color.clear_entire_line()
-                    Color.p('{+} {C}Captured {G}%d{W} unique SSIDs from probe requests...' % len(self.pnl_networks))
+                    progress_msg = '{+} {C}Captured {G}%d{W} unique SSIDs from probe requests' % len(self.pnl_networks)
+                    
+                    if target_essid:
+                        if target_essid in self.pnl_networks:
+                            progress_msg += ' {G}✓ Target found{W}'
+                        else:
+                            progress_msg += ' {R}✗ Target not found{W}'
+                    
+                    Color.p(progress_msg)
                     
                     # GUI logging
                     if hasattr(self, 'target') and self.target:
@@ -1310,10 +1331,14 @@ class AttackKARMA(Attack):
             
             Color.pl('')  # New line after progress
             
+            # Validate target was found
+            target_validation_result = self.validate_selected_target()
+            
             if len(self.pnl_networks) >= Configuration.karma_min_probes:
                 Color.pl('{+} {G}Successfully captured {C}%d{W} networks from PNL{W}' % len(self.pnl_networks))
                 for ssid in sorted(self.pnl_networks):
-                    Color.pl('  {G}* {W}%s' % ssid)
+                    marker = ' {G}✓{W}' if ssid == target_essid else ''
+                    Color.pl('  {G}* {W}%s%s' % (ssid, marker))
                 
                 # GUI logging for phase completion
                 if hasattr(self, 'target') and self.target:
@@ -1323,6 +1348,14 @@ class AttackKARMA(Attack):
             else:
                 Color.pl('{!} {R}Only captured {O}%d{W} probe requests, need at least {O}%d{W}' % 
                         (len(self.pnl_networks), Configuration.karma_min_probes))
+                
+                # Provide helpful suggestions
+                Color.pl('{!} {O}Suggestions to improve probe capture:{W}')
+                Color.pl('{!} {O}  - Increase probe timeout (current: %d seconds){W}' % probe_timeout)
+                Color.pl('{!} {O}  - Move closer to active devices{W}')
+                Color.pl('{!} {O}  - Wait for devices to scan for networks{W}')
+                Color.pl('{!} {O}  - Try different time of day (more active devices){W}')
+                
                 return False
     
     def parse_probe_requests(self, capfile):
