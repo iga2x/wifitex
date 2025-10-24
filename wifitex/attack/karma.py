@@ -39,6 +39,17 @@ class AttackKARMA(Attack):
         self.rogue_ap_process = None
         self.dhcp_process = None
         self.dns_process = None
+        
+        # Configuration file paths (critical for avoiding AttributeError)
+        self.dnsmasq_config = None
+        self.hostapd_config = None
+        self.hostapd_configs = []
+        self.additional_processes = []
+        self.dns_spoofing_enabled = False
+        self._victim_mgmt_started = False
+        
+        # Thread management (prevents resource leaks)
+        self.active_threads = []
         self.success = False
         self.connected_clients = set()
         self.running = True
@@ -81,9 +92,7 @@ class AttackKARMA(Attack):
         
         # Process management and cleanup
         self._process_registry = {}  # Track all spawned processes
-        self._process_timeouts = {}  # Track process timeouts
         self.PROCESS_CLEANUP_TIMEOUT = 10  # Seconds to wait for process cleanup
-        self._cleanup_handlers_registered = False
         
         # Interface conflict resolution
         self._interface_locks = {}  # Track interface usage locks
@@ -3221,10 +3230,15 @@ driver=nl80211
 ssid={ssid}
 hw_mode=g
 channel={channel}
-wmm_enabled=0
+wmm_enabled=1
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
+country_code=US
+ieee80211n=1
+ieee80211ac=1
+ht_capab=[HT40+][HT40-][SHORT-GI-20][SHORT-GI-40]
+vht_capab=[VHT40][VHT80][VHT160][SHORT-GI-80][SHORT-GI-160]
 """
             
             # Add BSSID spoofing if specified
@@ -3434,24 +3448,35 @@ server=8.8.8.8
                 time.sleep(5)  # Increased timeout
                 
                 # Check if hostapd started successfully
-                # hostapd with -B flag will exit after starting daemon, so we check the output instead
-                stdout, stderr = self.rogue_ap_process.communicate()
-                
-                # Check if hostapd output indicates successful AP startup
-                if stdout and ('AP-ENABLED' in stdout or 'interface state' in stdout):
+                # hostapd with -B flag runs in background, so we check if it's still running
+                if self.rogue_ap_process.poll() is None:
+                    # Process is still running in background - success!
                     Color.pl('{+} {G}Primary Evil Twin started successfully{W}')
-                    if 'AP-ENABLED' in stdout:
-                        Color.pl('{+} {G}AP is enabled and ready for connections{W}')
+                    Color.pl('{+} {G}AP is enabled and ready for connections{W}')
+                    
+                    # Verify AP is actually working by checking interface status
+                    try:
+                        if self.rogue_interface:
+                            result = subprocess.run(['iwconfig', self.rogue_interface], capture_output=True, text=True, timeout=3)
+                            if result.returncode == 0 and 'Mode:Master' in result.stdout:
+                                Color.pl('{+} {G}Interface confirmed in Master mode - AP is active{W}')
+                            else:
+                                Color.pl('{!} {O}Warning: Interface may not be in Master mode{W}')
+                        else:
+                            Color.pl('{!} {O}Warning: No rogue interface available for verification{W}')
+                    except Exception as e:
+                        if Configuration.verbose > 1:
+                            Color.pl('{!} {O}Could not verify interface mode: {O}%s{W}' % str(e))
                 else:
-                    # Check if process exited with error
-                    if self.rogue_ap_process.returncode != 0:
-                        error_msg = 'Failed to start primary Evil Twin'
-                        Color.pl('{!} {R}%s{W}' % error_msg)
-                        if stderr:
-                            Color.pl('{!} {O}hostapd error: {R}%s{W}' % stderr.strip())
-                            error_msg += ': ' + stderr.strip()
-                        if stdout:
-                            Color.pl('{!} {O}hostapd output: {R}%s{W}' % stdout.strip())
+                    # Process exited, get error output
+                    stdout, stderr = self.rogue_ap_process.communicate()
+                    error_msg = 'Failed to start primary Evil Twin'
+                    Color.pl('{!} {R}%s{W}' % error_msg)
+                    if stderr:
+                        Color.pl('{!} {O}hostapd error: {R}%s{W}' % stderr.strip())
+                        error_msg += ': ' + stderr.strip()
+                    if stdout:
+                        Color.pl('{!} {O}hostapd output: {R}%s{W}' % stdout.strip())
                         
                         # Provide comprehensive troubleshooting
                         self.provide_hostapd_troubleshooting()
@@ -3676,6 +3701,12 @@ server=8.8.8.8
                                 name=f'handshake_{mac.replace(":", "")}'
                             )
                             handshake_thread.daemon = True
+                            
+                            # Track threads properly to prevent resource leaks
+                            if not hasattr(self, 'active_threads'):
+                                self.active_threads = []
+                            self.active_threads.append(handshake_thread)
+                            
                             handshake_thread.start()
                         
                         # Start credential harvesting for this client
@@ -3712,8 +3743,9 @@ server=8.8.8.8
                             mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
                             if mac_match:
                                 connected_macs.add(mac_match.group(1).lower())
-            except:
-                pass
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError) as e:
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {R}Error checking station dump: {O}%s{W}' % str(e))
             
             # Method 2: Check DHCP leases if dnsmasq is running
             if hasattr(self, 'dnsmasq_config') and self.dnsmasq_config:
@@ -3726,8 +3758,9 @@ server=8.8.8.8
                                 if len(parts) >= 3:
                                     mac = parts[1].lower()
                                     connected_macs.add(mac)
-                except:
-                    pass
+                except (FileNotFoundError, PermissionError, IOError) as e:
+                    if Configuration.verbose > 1:
+                        Color.pl('{!} {R}Error reading DHCP leases file: {O}%s{W}' % str(e))
             
             # Method 3: Check ARP table for clients on our subnet
             try:
@@ -3739,8 +3772,9 @@ server=8.8.8.8
                             mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
                             if mac_match:
                                 connected_macs.add(mac_match.group(1).lower())
-            except:
-                pass
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError) as e:
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {R}Error checking ARP table: {O}%s{W}' % str(e))
             
             return connected_macs
             
@@ -4382,6 +4416,16 @@ server=8.8.8.8
         # Clean up handshake capture threads
         self.cleanup_all_capture_threads()
         
+        # Clean up active threads to prevent resource leaks
+        if hasattr(self, 'active_threads') and self.active_threads:
+            Color.pl('{+} {C}Cleaning up active threads...{W}')
+            for thread in self.active_threads:
+                if thread.is_alive():
+                    Color.pl('{+} {C}Waiting for thread: {G}%s{W}' % thread.name)
+                    thread.join(timeout=5)  # Wait up to 5 seconds
+            self.active_threads.clear()
+            Color.pl('{+} {G}Thread cleanup completed{W}')
+        
         # Clean up all registered processes
         self.cleanup_all_processes()
         
@@ -4426,9 +4470,9 @@ server=8.8.8.8
         
         # Clean up temporary files
         try:
-            if hasattr(self, 'hostapd_config') and os.path.exists(self.hostapd_config):
+            if hasattr(self, 'hostapd_config') and self.hostapd_config and os.path.exists(self.hostapd_config):
                 os.remove(self.hostapd_config)
-            if hasattr(self, 'dnsmasq_config') and os.path.exists(self.dnsmasq_config):
+            if hasattr(self, 'dnsmasq_config') and self.dnsmasq_config and os.path.exists(self.dnsmasq_config):
                 os.remove(self.dnsmasq_config)
             
             # Clean up additional config files
