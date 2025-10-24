@@ -53,6 +53,14 @@ class Wifitex(object):
         from .model.handshake import Handshake
         from .util.crack import CrackHelper
 
+        # Handle monitor mode commands
+        if Configuration.enable_monitor:
+            self.handle_enable_monitor()
+            return
+        elif Configuration.disable_monitor:
+            self.handle_disable_monitor()
+            return
+
         if Configuration.show_cracked:
             CrackResult.display()
 
@@ -65,6 +73,91 @@ class Wifitex(object):
         else:
             Configuration.get_monitor_mode_interface()
             self.scan_and_attack()
+    
+    def handle_enable_monitor(self):
+        """Handle --enable-monitor command"""
+        from .gui.utils import NetworkUtils, SystemUtils
+        
+        Color.pl('{+} {C}Enabling monitor mode...{W}')
+        
+        # Get interface to use
+        if Configuration.interface:
+            target_interface = Configuration.interface
+        else:
+            interfaces = SystemUtils.get_wireless_interfaces()
+            if not interfaces:
+                Color.pl('{!} {R}No wireless interfaces found{W}')
+                return
+            elif len(interfaces) == 1:
+                target_interface = interfaces[0]
+            else:
+                Color.pl('{!} {R}Multiple interfaces found. Please specify with -i{W}')
+                Color.pl('{!} {O}Available interfaces: %s{W}' % ', '.join(interfaces))
+                return
+        
+        Color.pl('{+} {C}Target interface: %s{W}' % target_interface)
+        
+        # Enable monitor mode using NetworkUtils (same as GUI)
+        network_utils = NetworkUtils()
+        success = network_utils.enable_monitor_mode(target_interface)
+        
+        if success:
+            Color.pl('{+} {G}Monitor mode enabled on %s{W}' % target_interface)
+        else:
+            Color.pl('{!} {R}Failed to enable monitor mode on %s{W}' % target_interface)
+            Color.pl('{!} {O}Please try manually:{W}')
+            Color.pl('{!} {O}  sudo airmon-ng start %s{W}' % target_interface)
+            Color.pl('{!} {O}  sudo ifconfig %s down{W}' % target_interface)
+            Color.pl('{!} {O}  sudo iwconfig %s mode monitor{W}' % target_interface)
+            Color.pl('{!} {O}  sudo ifconfig %s up{W}' % target_interface)
+    
+    def handle_disable_monitor(self):
+        """Handle --disable-monitor command"""
+        from .gui.utils import NetworkUtils, SystemUtils
+        
+        Color.pl('{+} {C}Disabling monitor mode...{W}')
+        
+        # Get interface to use
+        if Configuration.interface:
+            target_interface = Configuration.interface
+        else:
+            # Find monitor interfaces
+            interfaces = SystemUtils.get_wireless_interfaces()
+            monitor_interfaces = []
+            for interface in interfaces:
+                try:
+                    import subprocess
+                    result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0 and 'Mode:Monitor' in result.stdout:
+                        monitor_interfaces.append(interface)
+                except:
+                    pass
+            
+            if not monitor_interfaces:
+                Color.pl('{!} {R}No monitor mode interfaces found{W}')
+                return
+            elif len(monitor_interfaces) == 1:
+                target_interface = monitor_interfaces[0]
+            else:
+                Color.pl('{!} {R}Multiple monitor interfaces found. Please specify with -i{W}')
+                Color.pl('{!} {O}Available monitor interfaces: %s{W}' % ', '.join(monitor_interfaces))
+                return
+        
+        Color.pl('{+} {C}Target interface: %s{W}' % target_interface)
+        
+        # Disable monitor mode using NetworkUtils (same as GUI)
+        network_utils = NetworkUtils()
+        success = network_utils.disable_monitor_mode(target_interface)
+        
+        if success:
+            Color.pl('{+} {G}Monitor mode disabled on %s{W}' % target_interface)
+        else:
+            Color.pl('{!} {R}Failed to disable monitor mode on %s{W}' % target_interface)
+            Color.pl('{!} {O}Please try manually:{W}')
+            Color.pl('{!} {O}  sudo airmon-ng stop %s{W}' % target_interface)
+            Color.pl('{!} {O}  sudo ifconfig %s down{W}' % target_interface)
+            Color.pl('{!} {O}  sudo iwconfig %s mode managed{W}' % target_interface)
+            Color.pl('{!} {O}  sudo ifconfig %s up{W}' % target_interface)
 
 
     def print_banner(self):

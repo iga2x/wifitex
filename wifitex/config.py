@@ -55,6 +55,10 @@ class Configuration(object):
         cls.no_deauth = False # Deauth hidden networks & WPA handshake targets
         cls.num_deauths = 1 # Number of deauth packets to send to each target.
 
+        # Monitor mode commands
+        cls.enable_monitor = False
+        cls.disable_monitor = False
+
         cls.encryption_filter = ['WPA', 'WPS']
 
         # EvilTwin variables
@@ -151,31 +155,82 @@ class Configuration(object):
     @classmethod
     def get_monitor_mode_interface(cls):
         if cls.interface is None:
-            # Interface wasn't defined, use interactive selection
-            from .tools.airmon import Airmon
-            
-            try:
-                # Always use interactive selection for CLI
-                cls.interface = Airmon.ask()
-            except Exception as e:
-                # If interactive selection fails, try to use a default interface
-                import subprocess
-                try:
-                    result = subprocess.run(['iwconfig'], capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0:
-                        # Extract first interface from iwconfig output
-                        lines = result.stdout.split('\n')
-                        for line in lines:
-                            if line and not line.startswith(' ') and ':' in line:
-                                interface = line.split(':')[0].strip()
-                                if interface and interface.startswith('wlan'):
-                                    cls.interface = interface
-                                    break
-                except:
-                    pass
+            # Use the same robust monitor mode handling as GUI
+            cls.interface = cls._get_monitor_mode_interface_cli()
             
             if cls.random_mac and cls.interface:
                 Macchanger.random()
+    
+    @classmethod
+    def _get_monitor_mode_interface_cli(cls):
+        """Get monitor mode interface using the same robust method as GUI"""
+        import subprocess
+        from .gui.utils import NetworkUtils, SystemUtils
+        
+        Color.pl('{+} {C}Detecting wireless interfaces...{W}')
+        
+        # Get available wireless interfaces
+        interfaces = SystemUtils.get_wireless_interfaces()
+        if not interfaces:
+            Color.pl('{!} {R}No wireless interfaces found{W}')
+            return None
+        
+        # Check for existing monitor mode interfaces
+        monitor_interfaces = []
+        for interface in interfaces:
+            try:
+                result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0 and 'Mode:Monitor' in result.stdout:
+                    monitor_interfaces.append(interface)
+            except:
+                pass
+        
+        # If we have monitor interfaces, use the first one
+        if monitor_interfaces:
+            Color.pl('{+} {G}Found monitor interface: %s{W}' % monitor_interfaces[0])
+            return monitor_interfaces[0]
+        
+        # No monitor interfaces found, need to enable monitor mode
+        if len(interfaces) == 1:
+            # Only one interface, use it
+            target_interface = interfaces[0]
+            Color.pl('{+} {C}Using interface: %s{W}' % target_interface)
+        else:
+            # Multiple interfaces, let user choose
+            Color.pl('{+} {C}Multiple interfaces found:{W}')
+            for i, interface in enumerate(interfaces, 1):
+                Color.pl('  {G}%d{W}. {C}%s{W}' % (i, interface))
+            
+            while True:
+                try:
+                    choice = input('{+} {C}Select interface (1-%d): {W}' % len(interfaces))
+                    choice_idx = int(choice) - 1
+                    if 0 <= choice_idx < len(interfaces):
+                        target_interface = interfaces[choice_idx]
+                        break
+                    else:
+                        Color.pl('{!} {R}Invalid choice. Please select 1-%d{W}' % len(interfaces))
+                except (ValueError, KeyboardInterrupt):
+                    Color.pl('{!} {R}Invalid input{W}')
+                    return None
+        
+        # Enable monitor mode using NetworkUtils (same as GUI)
+        Color.pl('{+} {C}Enabling monitor mode on %s...{W}' % target_interface)
+        
+        network_utils = NetworkUtils()
+        success = network_utils.enable_monitor_mode(target_interface)
+        
+        if success:
+            Color.pl('{+} {G}Monitor mode enabled on %s{W}' % target_interface)
+            return target_interface
+        else:
+            Color.pl('{!} {R}Failed to enable monitor mode on %s{W}' % target_interface)
+            Color.pl('{!} {O}Please try manually:{W}')
+            Color.pl('{!} {O}  sudo airmon-ng start %s{W}' % target_interface)
+            Color.pl('{!} {O}  sudo ifconfig %s down{W}' % target_interface)
+            Color.pl('{!} {O}  sudo iwconfig %s mode monitor{W}' % target_interface)
+            Color.pl('{!} {O}  sudo ifconfig %s up{W}' % target_interface)
+            return None
 
     @classmethod
     def load_from_arguments(cls):
@@ -275,6 +330,13 @@ class Configuration(object):
         if args.kill_conflicting_processes:
             cls.kill_conflicting_processes = True
             Color.pl('{+} {C}option:{W} kill conflicting processes {G}enabled{W}')
+
+        # Monitor mode commands
+        if hasattr(args, 'enable_monitor') and args.enable_monitor:
+            cls.enable_monitor = True
+            
+        if hasattr(args, 'disable_monitor') and args.disable_monitor:
+            cls.disable_monitor = True
 
 
     @classmethod

