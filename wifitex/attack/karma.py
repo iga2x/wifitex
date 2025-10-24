@@ -3087,7 +3087,7 @@ class AttackKARMA(Attack):
             
             target_ssid = target_network.essid
             target_bssid = target_network.bssid
-            target_channel = target_network.channel
+            target_channel = int(target_network.channel)
             
             # Check if this is the user's selected target
             user_target = getattr(self, 'target', None)
@@ -3138,9 +3138,9 @@ class AttackKARMA(Attack):
             # Get a good channel (use target channel or default)
             target_channel = 6  # Default channel
             if hasattr(self, 'target') and self.target and self.target.channel:
-                target_channel = self.target.channel
+                target_channel = int(self.target.channel)
             elif hasattr(self, 'real_networks') and self.real_networks:
-                target_channel = self.real_networks[0].channel
+                target_channel = int(self.real_networks[0].channel)
             
             Color.pl('{+} {C}Using channel {G}%d{W} for Evil Twins{W}' % target_channel)
             
@@ -3177,7 +3177,7 @@ class AttackKARMA(Attack):
         try:
             target_ssid = target_network.essid
             target_bssid = target_network.bssid
-            target_channel = target_network.channel
+            target_channel = int(target_network.channel)
             
             Color.pl('{+} {G}Creating Evil Twin for target network: {C}%s{W} (Channel {C}%s{W})' % (target_ssid, target_channel))
             
