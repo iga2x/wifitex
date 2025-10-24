@@ -69,12 +69,12 @@ class Configuration(object):
 
         # KARMA Attack variables
         cls.use_karma = False
-        cls.karma_probe_timeout = 30  # Time to capture probe requests (seconds)
+        cls.karma_probe_timeout = 50  # Time to capture probe requests (seconds)
         cls.karma_rogue_interface = None  # Interface for rogue AP
         cls.karma_probe_interface = None  # Interface for capturing probe requests
         cls.karma_auto_connect = True  # Enable automatic victim connection
         cls.karma_capture_all_channels = False  # Capture probes from all channels
-        cls.karma_min_probes = 3  # Minimum number of probe requests to capture before starting attack
+        cls.karma_min_probes = 1  # Minimum number of probe requests to capture before starting attack
         cls.karma_dns_spoofing = False  # Enable DNS spoofing for Layer 7 attacks (disabled by default)
 
         # WPA/WPA2/WPA3 variables

