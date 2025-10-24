@@ -3161,6 +3161,7 @@ class AttackKARMA(Attack):
                             break
             
             if created_count > 0:
+                self.hostapd_config = self.hostapd_configs[0]  # Set primary config
                 Color.pl('{+} {G}Successfully created {C}%d{W} Evil Twins from probe requests{W}' % created_count)
                 Color.pl('{+} {G}Clients will now connect to familiar SSIDs from their PNL!{W}')
                 return True
