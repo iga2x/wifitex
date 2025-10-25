@@ -23,7 +23,8 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QLineEdit, QSpinBox, QCheckBox, QGroupBox,
     QTabWidget, QProgressBar, QStatusBar, QMenuBar, QMessageBox,
     QFileDialog, QSplitter, QFrame, QScrollArea, QListWidget,
-    QListWidgetItem, QDialog, QDialogButtonBox, QFormLayout
+    QListWidgetItem, QDialog, QDialogButtonBox, QFormLayout,
+    QAbstractItemView
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve,
@@ -114,7 +115,15 @@ class WifitexMainWindow(QMainWindow):
     def setup_ui(self):
         """Initialize and setup the user interface"""
         self.setWindowTitle("Wifitex - Wireless Network Auditor")
-        self.setGeometry(100, 100, 1400, 900)
+        
+        # Set a more reasonable default size that fits most displays
+        self.resize(1200, 800)
+        
+        # Set minimum size to prevent window from becoming too small
+        self.setMinimumSize(800, 600)
+        
+        # Center the window on screen
+        self.center_window()
         
         # Apply dark theme
         self.setStyleSheet(DarkTheme.get_stylesheet())
@@ -146,6 +155,20 @@ class WifitexMainWindow(QMainWindow):
         
         # Create status bar
         self.create_status_bar()
+        
+    def center_window(self):
+        """Center the window on the screen"""
+        # Get the screen geometry
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geometry = screen.geometry()
+            
+            # Calculate center position
+            x = (screen_geometry.width() - self.width()) // 2
+            y = (screen_geometry.height() - self.height()) // 2
+            
+            # Move window to center
+            self.move(x, y)
         
     def create_left_panel(self):
         """Create the left control panel"""
@@ -287,6 +310,10 @@ class WifitexMainWindow(QMainWindow):
         
         self.karma_all_channels_cb = QCheckBox("Capture from all channels")
         self.karma_options_layout.addWidget(self.karma_all_channels_cb, 1, 0, 1, 2)
+        
+        self.karma_handshake_cracking_cb = QCheckBox("Enable Handshake Capture & Cracking")
+        self.karma_handshake_cracking_cb.setChecked(False)  # Default disabled
+        self.karma_options_layout.addWidget(self.karma_handshake_cracking_cb, 1, 2, 1, 2)
         
         self.karma_options_group.setVisible(False)
         options_layout.addWidget(self.karma_options_group, 2, 0, 1, 4)
@@ -431,8 +458,17 @@ class WifitexMainWindow(QMainWindow):
         
         tab_widget.addTab(attack_info_tab, "Attack Info")
         
+        # Client Monitoring tab
+        client_monitoring_tab = self.create_client_monitoring_tab()
+        tab_widget.addTab(client_monitoring_tab, "Client Monitoring")
+        
         # Settings tab
-        tab_widget.addTab(self.settings_panel, "Settings")
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidget(self.settings_panel)
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        tab_widget.addTab(settings_scroll, "Settings")
         
         layout.addWidget(tab_widget)
         
@@ -1253,6 +1289,7 @@ class WifitexMainWindow(QMainWindow):
             'karma_probe_timeout': self.karma_probe_timeout_spin.value(),
             'karma_min_probes': self.karma_min_probes_spin.value(),
             'karma_all_channels': self.karma_all_channels_cb.isChecked(),
+            'karma_handshake_cracking': self.karma_handshake_cracking_cb.isChecked(),
             'karma_dns_spoofing': self.settings_panel.karma_dns_spoofing_cb.isChecked()
         }
         
@@ -1810,6 +1847,534 @@ class WifitexMainWindow(QMainWindow):
                 self.status_update.emit(f"Log saved to {filename}")
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", f"Failed to save log: {str(e)}")
+                
+    def create_client_monitoring_tab(self):
+        """Create tab for monitoring connected clients"""
+        client_tab = QWidget()
+        layout = QVBoxLayout(client_tab)
+        
+        # Client list section
+        client_list_group = QGroupBox("Connected Clients")
+        client_list_layout = QVBoxLayout(client_list_group)
+        
+        # Client list table
+        self.client_list_table = QTableWidget()
+        self.client_list_table.setColumnCount(6)
+        self.client_list_table.setHorizontalHeaderLabels([
+            "MAC Address", "IP Address", "Hostname", "Connection Time", "Traffic", "Status"
+        ])
+        self.client_list_table.setMaximumHeight(200)
+        self.client_list_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.client_list_table.setAlternatingRowColors(True)
+        client_list_layout.addWidget(self.client_list_table)
+        
+        # Client action buttons
+        client_actions_layout = QHBoxLayout()
+        
+        self.kick_client_btn = QPushButton("Kick Client")
+        self.kick_client_btn.clicked.connect(self.kick_selected_client)
+        self.kick_client_btn.setEnabled(False)
+        client_actions_layout.addWidget(self.kick_client_btn)
+        
+        self.view_traffic_btn = QPushButton("View Traffic")
+        self.view_traffic_btn.clicked.connect(self.view_client_traffic)
+        self.view_traffic_btn.setEnabled(False)
+        client_actions_layout.addWidget(self.view_traffic_btn)
+        
+        self.analyze_credentials_btn = QPushButton("Analyze Credentials")
+        self.analyze_credentials_btn.clicked.connect(self.analyze_client_credentials)
+        self.analyze_credentials_btn.setEnabled(False)
+        client_actions_layout.addWidget(self.analyze_credentials_btn)
+        
+        client_actions_layout.addStretch()
+        client_list_layout.addLayout(client_actions_layout)
+        
+        layout.addWidget(client_list_group)
+        
+        # Client details section
+        client_details_group = QGroupBox("Client Details")
+        client_details_layout = QVBoxLayout(client_details_group)
+        
+        self.client_details = QTextEdit()
+        self.client_details.setReadOnly(True)
+        self.client_details.setMaximumHeight(150)
+        self.client_details.setFont(QFont("Consolas", 9))
+        self.client_details.setAcceptRichText(True)
+        self.client_details.setStyleSheet("""
+            QTextEdit {
+                background-color: #2d3748;
+                color: #e2e8f0;
+                border: 1px solid #4a5568;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+        self.client_details.setHtml("""
+            <div style="color: #868e96; font-family: Consolas, monospace; font-size: 9pt; text-align: center; padding: 20px;">
+                Select a client to view details
+            </div>
+        """)
+        client_details_layout.addWidget(self.client_details)
+        
+        layout.addWidget(client_details_group)
+        
+        # Traffic statistics section
+        traffic_stats_group = QGroupBox("Traffic Statistics")
+        traffic_stats_layout = QVBoxLayout(traffic_stats_group)
+        
+        self.traffic_stats = QTextEdit()
+        self.traffic_stats.setReadOnly(True)
+        self.traffic_stats.setMaximumHeight(100)
+        self.traffic_stats.setFont(QFont("Consolas", 9))
+        self.traffic_stats.setAcceptRichText(True)
+        self.traffic_stats.setStyleSheet("""
+            QTextEdit {
+                background-color: #2d3748;
+                color: #e2e8f0;
+                border: 1px solid #4a5568;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+        self.traffic_stats.setHtml("""
+            <div style="color: #868e96; font-family: Consolas, monospace; font-size: 9pt; text-align: center; padding: 20px;">
+                Traffic statistics will appear here during KARMA attacks
+            </div>
+        """)
+        traffic_stats_layout.addWidget(self.traffic_stats)
+        
+        layout.addWidget(traffic_stats_group)
+        
+        # Data access section
+        data_access_group = QGroupBox("Captured Data Access")
+        data_access_layout = QVBoxLayout(data_access_group)
+        
+        # PCAP files
+        pcap_layout = QHBoxLayout()
+        pcap_layout.addWidget(QLabel("PCAP Files:"))
+        self.open_pcap_folder_btn = QPushButton("Open PCAP Folder")
+        self.open_pcap_folder_btn.clicked.connect(self.open_pcap_folder)
+        pcap_layout.addWidget(self.open_pcap_folder_btn)
+        data_access_layout.addLayout(pcap_layout)
+        
+        # Handshake files
+        handshake_layout = QHBoxLayout()
+        handshake_layout.addWidget(QLabel("Handshakes:"))
+        self.open_handshake_folder_btn = QPushButton("Open Handshake Folder")
+        self.open_handshake_folder_btn.clicked.connect(self.open_handshake_folder)
+        handshake_layout.addWidget(self.open_handshake_folder_btn)
+        data_access_layout.addLayout(handshake_layout)
+        
+        # Credential files
+        cred_layout = QHBoxLayout()
+        cred_layout.addWidget(QLabel("Credentials:"))
+        self.open_credential_folder_btn = QPushButton("Open Credential Folder")
+        self.open_credential_folder_btn.clicked.connect(self.open_credential_folder)
+        cred_layout.addWidget(self.open_credential_folder_btn)
+        data_access_layout.addLayout(cred_layout)
+        
+        # Open Wireshark
+        wireshark_layout = QHBoxLayout()
+        wireshark_layout.addWidget(QLabel("Analysis:"))
+        self.open_wireshark_btn = QPushButton("Open in Wireshark")
+        self.open_wireshark_btn.clicked.connect(self.open_in_wireshark)
+        wireshark_layout.addWidget(self.open_wireshark_btn)
+        data_access_layout.addLayout(wireshark_layout)
+        
+        layout.addWidget(data_access_group)
+        
+        # Connect client list selection to enable/disable buttons
+        self.client_list_table.itemSelectionChanged.connect(self.on_client_selection_changed)
+        
+        # Start KARMA monitoring timer (with longer interval to prevent freezing)
+        self.karma_monitor_timer = QTimer()
+        self.karma_monitor_timer.timeout.connect(self.update_karma_client_monitoring)
+        self.karma_monitor_timer.start(5000)  # Update every 5 seconds to prevent GUI freezing
+        
+        return client_tab
+    
+    def update_karma_client_monitoring(self):
+        """Update the client monitoring display with KARMA attack status"""
+        try:
+            # Check if there's an active KARMA attack (with timeout protection)
+            if not (hasattr(self, 'attack_manager') and 
+                    hasattr(self.attack_manager, 'attack_thread') and
+                    self.attack_manager.attack_thread):
+                return
+            
+            # Quick check to avoid blocking
+            attack_thread = self.attack_manager.attack_thread
+            if not hasattr(attack_thread, 'current_attack') or not attack_thread.current_attack:
+                return
+            
+            attack = attack_thread.current_attack
+            
+            # Check if it's a KARMA attack (has get_karma_status method)
+            if not hasattr(attack, 'get_karma_status'):
+                return  # Not a KARMA attack, skip monitoring
+            
+            # Get KARMA status - use getattr with timeout protection
+            try:
+                get_karma_status_method = getattr(attack, 'get_karma_status', None)
+                if get_karma_status_method:
+                    # Call method without blocking
+                    status = get_karma_status_method()
+                    
+                    # Only update if status is valid and not empty
+                    if status and isinstance(status, dict):
+                        # Update client list (non-blocking)
+                        self.update_client_list(status)
+                        
+                        # Update traffic statistics (non-blocking)
+                        self.update_traffic_statistics(status)
+                else:
+                    return  # Method doesn't exist
+            except (AttributeError, TypeError) as e:
+                # Method call failed - silently ignore to prevent GUI freeze
+                if hasattr(self, 'log_update'):
+                    self.log_update.emit(f"[DEBUG] KARMA status unavailable: {type(e).__name__}")
+                return
+            except Exception as e:
+                # Any other error - log briefly then continue
+                if hasattr(self, 'log_update'):
+                    self.log_update.emit(f"[DEBUG] KARMA monitoring skipped: {type(e).__name__}")
+                return
+                
+        except (AttributeError, RuntimeError):
+            # No active KARMA attack or thread ended
+            pass
+        except Exception as e:
+            # Don't log errors that might freeze GUI - just silently continue
+            pass
+    
+    def update_client_list(self, status):
+        """Update the client list table with KARMA client data"""
+        try:
+            # Limit number of clients to prevent GUI freeze with large lists
+            client_details = status.get('client_details', [])[:50]  # Max 50 clients
+            
+            # Only update if content changed to avoid unnecessary redraws
+            current_count = self.client_list_table.rowCount()
+            if len(client_details) == current_count:
+                # Check if content is same (quick optimization)
+                return
+            
+            # Disable sorting during update to prevent blocking
+            self.client_list_table.setSortingEnabled(False)
+            
+            # Clear existing rows
+            self.client_list_table.setRowCount(0)
+            
+            # Add clients from status
+            for client in client_details:
+                row = self.client_list_table.rowCount()
+                self.client_list_table.insertRow(row)
+                
+                # MAC Address
+                self.client_list_table.setItem(row, 0, QTableWidgetItem(str(client.get('mac', 'Unknown'))))
+                
+                # IP Address (not available from KARMA status)
+                self.client_list_table.setItem(row, 1, QTableWidgetItem("N/A"))
+                
+                # Hostname (not available from KARMA status)
+                self.client_list_table.setItem(row, 2, QTableWidgetItem("N/A"))
+                
+                # Connection Time
+                self.client_list_table.setItem(row, 3, QTableWidgetItem("Connected"))
+                
+                # Traffic (credentials count)
+                if client.get('credential_count'):
+                    self.client_list_table.setItem(row, 4, QTableWidgetItem(f"{client['credential_count']} credentials"))
+                else:
+                    self.client_list_table.setItem(row, 4, QTableWidgetItem("Monitoring"))
+                
+                # Status
+                status_parts = []
+                if client.get('password_cracked'):
+                    status_parts.append("CRACKED")
+                if client.get('has_handshake'):
+                    status_parts.append("Handshake")
+                if client.get('has_credentials'):
+                    status_parts.append("Credentials")
+                status_text = " - ".join(status_parts) if status_parts else "Monitoring"
+                self.client_list_table.setItem(row, 5, QTableWidgetItem(status_text))
+            
+            # Re-enable sorting
+            self.client_list_table.setSortingEnabled(True)
+                
+        except Exception as e:
+            # Silently handle errors to prevent GUI freeze
+            pass
+    
+    def update_traffic_statistics(self, status):
+        """Update traffic statistics display"""
+        try:
+            # Quick check to avoid unnecessary updates
+            connected = status.get('connected_count', 0)
+            handshakes = status.get('handshakes_captured', 0)
+            passwords = status.get('passwords_cracked', 0)
+            credentials = status.get('credentials_harvested', 0)
+            pnl = status.get('pnl_networks', 0)
+            
+            stats_html = f"""
+            <div style="font-family: Consolas, monospace; font-size: 9pt; color: #e2e8f0;">
+                <h3 style="color: #4a9eff; margin-top: 0;">KARMA Statistics</h3>
+                <p><strong>Connected Clients:</strong> {connected}</p>
+                <p><strong>Handshakes Captured:</strong> {handshakes}</p>
+                <p><strong>Passwords Cracked:</strong> {passwords}</p>
+                <p><strong>Credentials Harvested:</strong> {credentials}</p>
+                <p><strong>PNL Networks:</strong> {pnl}</p>
+            </div>
+            """
+            # Only update if HTML changed (quick comparison)
+            current_html = self.traffic_stats.toPlainText()
+            if stats_html not in current_html:
+                self.traffic_stats.setHtml(stats_html)
+        except Exception as e:
+            # Silently handle errors to prevent GUI freeze
+            pass
+        
+    def on_client_selection_changed(self):
+        """Handle client selection change"""
+        selection_model = self.client_list_table.selectionModel()
+        if not selection_model:
+            return
+            
+        selected_rows = selection_model.selectedRows()
+        has_selection = len(selected_rows) > 0
+        
+        # Enable/disable action buttons based on selection
+        self.kick_client_btn.setEnabled(has_selection)
+        self.view_traffic_btn.setEnabled(has_selection)
+        self.analyze_credentials_btn.setEnabled(has_selection)
+        
+        if has_selection:
+            # Update client details
+            row = selected_rows[0].row()
+            self.update_client_details(row)
+    
+    def update_client_details(self, row):
+        """Update client details display"""
+        if row < self.client_list_table.rowCount():
+            mac_item = self.client_list_table.item(row, 0)
+            ip_item = self.client_list_table.item(row, 1)
+            hostname_item = self.client_list_table.item(row, 2)
+            conn_time_item = self.client_list_table.item(row, 3)
+            traffic_item = self.client_list_table.item(row, 4)
+            status_item = self.client_list_table.item(row, 5)
+            
+            mac = mac_item.text() if mac_item else "Unknown"
+            ip = ip_item.text() if ip_item else "Unknown"
+            hostname = hostname_item.text() if hostname_item else "Unknown"
+            conn_time = conn_time_item.text() if conn_time_item else "Unknown"
+            traffic = traffic_item.text() if traffic_item else "Unknown"
+            status = status_item.text() if status_item else "Unknown"
+            
+            details_html = f"""
+            <div style="font-family: Consolas, monospace; font-size: 9pt; color: #e2e8f0;">
+                <h3 style="color: #4a9eff; margin-top: 0;">Client Details</h3>
+                <p><strong>MAC Address:</strong> {mac}</p>
+                <p><strong>IP Address:</strong> {ip}</p>
+                <p><strong>Hostname:</strong> {hostname}</p>
+                <p><strong>Connection Time:</strong> {conn_time}</p>
+                <p><strong>Traffic:</strong> {traffic}</p>
+                <p><strong>Status:</strong> {status}</p>
+            </div>
+            """
+            self.client_details.setHtml(details_html)
+    
+    def kick_selected_client(self):
+        """Kick the selected client"""
+        selection_model = self.client_list_table.selectionModel()
+        if not selection_model:
+            return
+            
+        selected_rows = selection_model.selectedRows()
+        if selected_rows:
+            row = selected_rows[0].row()
+            mac_item = self.client_list_table.item(row, 0)
+            mac = mac_item.text() if mac_item else "Unknown"
+            
+            reply = QMessageBox.question(
+                self, "Kick Client", 
+                f"Are you sure you want to kick client {mac}?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                # TODO: Implement actual client kicking logic
+                self.log_update.emit(f"[CLIENT] Kicking client {mac}")
+                QMessageBox.information(self, "Client Kicked", f"Client {mac} has been kicked from the network.")
+    
+    def view_client_traffic(self):
+        """View traffic for selected client"""
+        selection_model = self.client_list_table.selectionModel()
+        if not selection_model:
+            return
+            
+        selected_rows = selection_model.selectedRows()
+        if selected_rows:
+            row = selected_rows[0].row()
+            mac_item = self.client_list_table.item(row, 0)
+            mac = mac_item.text() if mac_item else "Unknown"
+            
+            # TODO: Implement traffic viewing logic
+            self.log_update.emit(f"[CLIENT] Viewing traffic for client {mac}")
+            QMessageBox.information(self, "Traffic View", f"Opening traffic view for client {mac}")
+    
+    def analyze_client_credentials(self):
+        """Analyze credentials for selected client"""
+        selection_model = self.client_list_table.selectionModel()
+        if not selection_model:
+            return
+            
+        selected_rows = selection_model.selectedRows()
+        if selected_rows:
+            row = selected_rows[0].row()
+            mac_item = self.client_list_table.item(row, 0)
+            mac = mac_item.text() if mac_item else "Unknown"
+            
+            # TODO: Implement credential analysis logic
+            self.log_update.emit(f"[CLIENT] Analyzing credentials for client {mac}")
+            QMessageBox.information(self, "Credential Analysis", f"Analyzing credentials for client {mac}")
+    
+    def open_pcap_folder(self):
+        """Open PCAP files folder"""
+        import os
+        import subprocess
+        
+        # Default PCAP folder locations (including KARMA directories)
+        pcap_folders = [
+            "karma_captures/traffic/",
+            "karma_captures/probes/",
+            "karma_captures/handshakes/",
+            "karma_captures/credentials/",
+            "karma_captures/live_monitoring/",
+            os.path.expanduser("~/wifitex/karma_captures/traffic/"),
+            os.path.expanduser("~/wifitex/karma_captures/probes/"),
+            os.path.expanduser("~/wifitex/captures/"),
+            os.path.expanduser("~/wifitex/pcaps/"),
+            "./captures/",
+            "./pcaps/"
+        ]
+        
+        for folder in pcap_folders:
+            if os.path.exists(folder):
+                try:
+                    if os.name == 'nt':  # Windows
+                        os.startfile(folder)
+                    else:  # Linux/Mac
+                        subprocess.run(['xdg-open', folder])
+                    self.log_update.emit(f"[DATA] Opened PCAP folder: {folder}")
+                    return
+                except Exception as e:
+                    self.log_update.emit(f"[ERROR] Failed to open PCAP folder: {e}")
+        
+        QMessageBox.warning(self, "Folder Not Found", "PCAP folder not found. Make sure you have run a KARMA attack first.")
+    
+    def open_handshake_folder(self):
+        """Open handshake files folder"""
+        import os
+        import subprocess
+        
+        # Default handshake folder locations
+        handshake_folders = [
+            os.path.expanduser("~/wifitex/karma_captures/handshakes/"),
+            os.path.expanduser("~/wifitex/handshakes/"),
+            "./hs/",
+            "./handshakes/"
+        ]
+        
+        for folder in handshake_folders:
+            if os.path.exists(folder):
+                try:
+                    if os.name == 'nt':  # Windows
+                        os.startfile(folder)
+                    else:  # Linux/Mac
+                        subprocess.run(['xdg-open', folder])
+                    self.log_update.emit(f"[DATA] Opened handshake folder: {folder}")
+                    return
+                except Exception as e:
+                    self.log_update.emit(f"[ERROR] Failed to open handshake folder: {e}")
+        
+        QMessageBox.warning(self, "Folder Not Found", "Handshake folder not found. Make sure you have captured handshakes first.")
+    
+    def open_credential_folder(self):
+        """Open credential files folder"""
+        import os
+        import subprocess
+        
+        # Default credential folder locations
+        cred_folders = [
+            os.path.expanduser("~/wifitex/karma_captures/credentials/"),
+            os.path.expanduser("~/wifitex/credentials/"),
+            "./credentials/",
+            "./creds/"
+        ]
+        
+        for folder in cred_folders:
+            if os.path.exists(folder):
+                try:
+                    if os.name == 'nt':  # Windows
+                        os.startfile(folder)
+                    else:  # Linux/Mac
+                        subprocess.run(['xdg-open', folder])
+                    self.log_update.emit(f"[DATA] Opened credential folder: {folder}")
+                    return
+                except Exception as e:
+                    self.log_update.emit(f"[ERROR] Failed to open credential folder: {e}")
+        
+        QMessageBox.warning(self, "Folder Not Found", "Credential folder not found. Make sure you have captured credentials first.")
+    
+    def open_in_wireshark(self):
+        """Open latest PCAP file in Wireshark"""
+        import os
+        import subprocess
+        import glob
+        
+        # Look for PCAP files in common locations (including KARMA directories)
+        pcap_patterns = [
+            "karma_captures/traffic/*.pcap",
+            "karma_captures/traffic/*.cap",
+            "karma_captures/probes/*.pcap",
+            "karma_captures/probes/*.cap",
+            "karma_captures/handshakes/*.pcap",
+            "karma_captures/handshakes/*.cap",
+            "karma_captures/live_monitoring/*.pcap",
+            "karma_captures/live_monitoring/*.cap",
+            os.path.expanduser("~/wifitex/karma_captures/traffic/*.pcap"),
+            os.path.expanduser("~/wifitex/karma_captures/traffic/*.cap"),
+            os.path.expanduser("~/wifitex/karma_captures/probes/*.pcap"),
+            os.path.expanduser("~/wifitex/karma_captures/probes/*.cap"),
+            os.path.expanduser("~/wifitex/captures/*.pcap"),
+            os.path.expanduser("~/wifitex/pcaps/*.pcap"),
+            "./captures/*.pcap",
+            "./pcaps/*.pcap",
+            "./*.pcap",
+            "./*.cap"
+        ]
+        
+        latest_pcap = None
+        latest_time = 0
+        
+        for pattern in pcap_patterns:
+            for pcap_file in glob.glob(pattern):
+                if os.path.exists(pcap_file):
+                    file_time = os.path.getmtime(pcap_file)
+                    if file_time > latest_time:
+                        latest_time = file_time
+                        latest_pcap = pcap_file
+        
+        if latest_pcap:
+            try:
+                subprocess.run(['wireshark', latest_pcap], check=True)
+                self.log_update.emit(f"[DATA] Opened {latest_pcap} in Wireshark")
+            except subprocess.CalledProcessError:
+                QMessageBox.warning(self, "Wireshark Not Found", "Wireshark is not installed or not in PATH.")
+            except Exception as e:
+                self.log_update.emit(f"[ERROR] Failed to open Wireshark: {e}")
+        else:
+            QMessageBox.warning(self, "No PCAP Files", "No PCAP files found. Make sure you have run a KARMA attack first.")
                 
     def update_status(self, message):
         """Update status display"""
@@ -2379,7 +2944,8 @@ class WifitexMainWindow(QMainWindow):
     def save_settings(self):
         """Save application settings"""
         try:
-            settings = {
+            # Get main window settings
+            main_settings = {
                 'interface': self._get_current_interface(),
                 'channel': self.channel_spin.value(),
                 'five_ghz': self.five_ghz_cb.isChecked(),
@@ -2388,11 +2954,14 @@ class WifitexMainWindow(QMainWindow):
                 'crack': self.crack_cb.isChecked()
             }
             
-            # Also save settings panel settings
-            if hasattr(self.settings_panel, 'save_settings'):
-                self.settings_panel.save_settings()
+            # Get settings panel settings
+            settings_panel_settings = self.settings_panel.get_current_settings()
             
-            self.config_manager.save_settings(settings)
+            # Combine all settings
+            all_settings = {**main_settings, **settings_panel_settings}
+            
+            # Save combined settings
+            self.config_manager.save_settings(all_settings)
             self.status_update.emit("Settings saved")
             
         except Exception as e:

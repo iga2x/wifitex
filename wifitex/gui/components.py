@@ -501,6 +501,7 @@ class SettingsPanel(QWidget):
         # General settings
         general_group = QGroupBox("General Settings")
         general_layout = QGridLayout(general_group)
+        general_layout.setColumnStretch(1, 1)  # Make second column expandable
         
         # Interface settings
         general_layout.addWidget(QLabel("Default Interface:"), 0, 0)
@@ -555,6 +556,7 @@ class SettingsPanel(QWidget):
         # WPS settings
         wps_group = QGroupBox("WPS Settings")
         wps_layout = QGridLayout(wps_group)
+        wps_layout.setColumnStretch(1, 1)  # Make second column expandable
 
         # Pixie-Dust enable
         wps_layout.addWidget(QLabel("Enable Pixie-Dust:"), 0, 0)
@@ -653,6 +655,12 @@ class SettingsPanel(QWidget):
         self.karma_dns_spoofing_cb.setToolTip("Enable DNS redirection for traffic interception. Disable for pure Layer 2 KARMA only.")
         karma_layout.addWidget(self.karma_dns_spoofing_cb)
         
+        # Handshake cracking option
+        self.karma_handshake_cracking_cb = QCheckBox("Enable Handshake Capture & Cracking")
+        self.karma_handshake_cracking_cb.setChecked(False)  # Default disabled
+        self.karma_handshake_cracking_cb.setToolTip("Enable WPA handshake capture and offline cracking for connected clients")
+        karma_layout.addWidget(self.karma_handshake_cracking_cb)
+        
         # Probe timeout
         karma_layout.addWidget(QLabel("Probe Capture Timeout (seconds):"))
         self.karma_probe_timeout_spin = QSpinBox()
@@ -677,6 +685,57 @@ class SettingsPanel(QWidget):
         
         layout.addWidget(karma_group)
         
+        # KARMA Client Monitoring & Data Access Settings
+        client_monitoring_group = QGroupBox("Client Monitoring & Data Access")
+        client_monitoring_layout = QVBoxLayout(client_monitoring_group)
+        
+        # Enable client monitoring
+        self.karma_client_monitoring_cb = QCheckBox("Enable Real-time Client Monitoring")
+        self.karma_client_monitoring_cb.setChecked(True)
+        self.karma_client_monitoring_cb.setToolTip("Monitor connected clients in real-time and display their information")
+        client_monitoring_layout.addWidget(self.karma_client_monitoring_cb)
+        
+        # Enable traffic capture
+        self.karma_traffic_capture_cb = QCheckBox("Capture All Client Traffic (PCAP)")
+        self.karma_traffic_capture_cb.setChecked(True)
+        self.karma_traffic_capture_cb.setToolTip("Capture all network traffic from connected clients to PCAP files")
+        client_monitoring_layout.addWidget(self.karma_traffic_capture_cb)
+        
+        # Enable credential harvesting
+        self.karma_credential_harvesting_cb = QCheckBox("Enable Credential Harvesting")
+        self.karma_credential_harvesting_cb.setChecked(True)
+        self.karma_credential_harvesting_cb.setToolTip("Automatically extract and save credentials from client traffic")
+        client_monitoring_layout.addWidget(self.karma_credential_harvesting_cb)
+        
+        # Enable internet access
+        self.karma_internet_access_cb = QCheckBox("Allow Internet Access (For Live Data)")
+        self.karma_internet_access_cb.setChecked(False)
+        self.karma_internet_access_cb.setToolTip("Allow clients to access the internet for more realistic traffic patterns")
+        client_monitoring_layout.addWidget(self.karma_internet_access_cb)
+        
+        # Traffic analysis settings
+        analysis_layout = QHBoxLayout()
+        analysis_layout.addWidget(QLabel("Traffic Analysis:"))
+        
+        self.karma_analyze_http_cb = QCheckBox("HTTP/HTTPS")
+        self.karma_analyze_http_cb.setChecked(True)
+        self.karma_analyze_http_cb.setToolTip("Analyze HTTP and HTTPS traffic for credentials and sensitive data")
+        analysis_layout.addWidget(self.karma_analyze_http_cb)
+        
+        self.karma_analyze_dns_cb = QCheckBox("DNS")
+        self.karma_analyze_dns_cb.setChecked(True)
+        self.karma_analyze_dns_cb.setToolTip("Monitor DNS queries to identify visited websites")
+        analysis_layout.addWidget(self.karma_analyze_dns_cb)
+        
+        self.karma_analyze_smb_cb = QCheckBox("SMB")
+        self.karma_analyze_smb_cb.setChecked(True)
+        self.karma_analyze_smb_cb.setToolTip("Capture SMB credentials and file access attempts")
+        analysis_layout.addWidget(self.karma_analyze_smb_cb)
+        
+        client_monitoring_layout.addLayout(analysis_layout)
+        
+        layout.addWidget(client_monitoring_group)
+        
         # Settings management buttons
         settings_buttons = QHBoxLayout()
         self.save_settings_btn = QPushButton("Save Settings")
@@ -699,6 +758,25 @@ class SettingsPanel(QWidget):
         
         # Add stretch to push everything to top
         layout.addStretch()
+        
+        # Set proper sizing for form elements
+        self.setup_form_sizing()
+    
+    def setup_form_sizing(self):
+        """Setup proper sizing for form elements"""
+        # Set minimum widths for combo boxes and spin boxes
+        self.interface_combo.setMinimumWidth(150)
+        self.scan_timeout_spin.setMinimumWidth(80)
+        self.wpa_timeout_spin.setMinimumWidth(80)
+        self.wpa_deauth_timeout_spin.setMinimumWidth(80)
+        self.wps_timeout_spin.setMinimumWidth(80)
+        self.wps_pin_timeout_spin.setMinimumWidth(80)
+        self.wps_fail_thresh_spin.setMinimumWidth(80)
+        self.wps_timeout_thresh_spin.setMinimumWidth(80)
+        self.cracking_strategy_combo.setMinimumWidth(200)
+        self.wordlist_combo.setMinimumWidth(250)
+        self.karma_probe_timeout_spin.setMinimumWidth(80)
+        self.karma_min_probes_spin.setMinimumWidth(80)
     
     def set_config_manager(self, config_manager):
         """Set the configuration manager for persistence"""
@@ -709,6 +787,7 @@ class SettingsPanel(QWidget):
         """Load default settings if no config manager is available"""
         # Set default values
         self.karma_dns_spoofing_cb.setChecked(False)
+        self.karma_handshake_cracking_cb.setChecked(False)
         self.karma_probe_timeout_spin.setValue(60)
         self.karma_min_probes_spin.setValue(1)
         self.karma_all_channels_cb.setChecked(False)
@@ -721,17 +800,11 @@ class SettingsPanel(QWidget):
         try:
             settings = self.config_manager.load_settings()
             
-            # Load KARMA settings
-            if 'karma_dns_spoofing' in settings:
-                self.karma_dns_spoofing_cb.setChecked(settings['karma_dns_spoofing'])
-            if 'karma_probe_timeout' in settings:
-                self.karma_probe_timeout_spin.setValue(settings['karma_probe_timeout'])
-            if 'karma_min_probes' in settings:
-                self.karma_min_probes_spin.setValue(settings['karma_min_probes'])
-            if 'karma_all_channels' in settings:
-                self.karma_all_channels_cb.setChecked(settings['karma_all_channels'])
-                
             # Load general settings
+            if 'default_interface' in settings:
+                index = self.interface_combo.findText(settings['default_interface'])
+                if index >= 0:
+                    self.interface_combo.setCurrentIndex(index)
             if 'scan_timeout' in settings:
                 self.scan_timeout_spin.setValue(settings['scan_timeout'])
             if 'wpa_timeout' in settings:
@@ -746,12 +819,66 @@ class SettingsPanel(QWidget):
                 self.kill_processes_cb.setChecked(settings['kill_processes'])
             if 'random_mac' in settings:
                 self.random_mac_cb.setChecked(settings['random_mac'])
+                
+            # Load WPS settings
+            if 'wps_pixie_dust' in settings:
+                self.wps_pixie_cb.setChecked(settings['wps_pixie_dust'])
+            if 'wps_pin_brute_force' in settings:
+                self.wps_pin_cb.setChecked(settings['wps_pin_brute_force'])
+            if 'wps_use_bully' in settings:
+                self.wps_use_bully_cb.setChecked(settings['wps_use_bully'])
+            if 'wps_ignore_lock' in settings:
+                self.wps_ignore_lock_cb.setChecked(settings['wps_ignore_lock'])
+            if 'wps_pin_timeout' in settings:
+                self.wps_pin_timeout_spin.setValue(settings['wps_pin_timeout'])
+            if 'wps_fail_threshold' in settings:
+                self.wps_fail_thresh_spin.setValue(settings['wps_fail_threshold'])
+            if 'wps_timeout_threshold' in settings:
+                self.wps_timeout_thresh_spin.setValue(settings['wps_timeout_threshold'])
+                
+            # Load password cracking settings
+            if 'cracking_strategy' in settings:
+                index = self.cracking_strategy_combo.findText(settings['cracking_strategy'])
+                if index >= 0:
+                    self.cracking_strategy_combo.setCurrentIndex(index)
+            if 'primary_wordlist' in settings:
+                index = self.wordlist_combo.findData(settings['primary_wordlist'])
+                if index >= 0:
+                    self.wordlist_combo.setCurrentIndex(index)
             if 'use_aircrack' in settings:
                 self.aircrack_cb.setChecked(settings['use_aircrack'])
             if 'use_hashcat' in settings:
                 self.hashcat_cb.setChecked(settings['use_hashcat'])
             if 'multi_wordlist' in settings:
                 self.multi_wordlist_cb.setChecked(settings['multi_wordlist'])
+            
+            # Load KARMA settings
+            if 'karma_dns_spoofing' in settings:
+                self.karma_dns_spoofing_cb.setChecked(settings['karma_dns_spoofing'])
+            if 'karma_handshake_cracking' in settings:
+                self.karma_handshake_cracking_cb.setChecked(settings['karma_handshake_cracking'])
+            if 'karma_probe_timeout' in settings:
+                self.karma_probe_timeout_spin.setValue(settings['karma_probe_timeout'])
+            if 'karma_min_probes' in settings:
+                self.karma_min_probes_spin.setValue(settings['karma_min_probes'])
+            if 'karma_all_channels' in settings:
+                self.karma_all_channels_cb.setChecked(settings['karma_all_channels'])
+                
+            # Load KARMA client monitoring settings
+            if 'karma_client_monitoring' in settings:
+                self.karma_client_monitoring_cb.setChecked(settings['karma_client_monitoring'])
+            if 'karma_traffic_capture' in settings:
+                self.karma_traffic_capture_cb.setChecked(settings['karma_traffic_capture'])
+            if 'karma_credential_harvesting' in settings:
+                self.karma_credential_harvesting_cb.setChecked(settings['karma_credential_harvesting'])
+            if 'karma_internet_access' in settings:
+                self.karma_internet_access_cb.setChecked(settings['karma_internet_access'])
+            if 'karma_analyze_http' in settings:
+                self.karma_analyze_http_cb.setChecked(settings['karma_analyze_http'])
+            if 'karma_analyze_dns' in settings:
+                self.karma_analyze_dns_cb.setChecked(settings['karma_analyze_dns'])
+            if 'karma_analyze_smb' in settings:
+                self.karma_analyze_smb_cb.setChecked(settings['karma_analyze_smb'])
                 
         except Exception as e:
             print(f"Error loading settings: {e}")
@@ -763,13 +890,8 @@ class SettingsPanel(QWidget):
             
         try:
             settings = {
-                # KARMA settings
-                'karma_dns_spoofing': self.karma_dns_spoofing_cb.isChecked(),
-                'karma_probe_timeout': self.karma_probe_timeout_spin.value(),
-                'karma_min_probes': self.karma_min_probes_spin.value(),
-                'karma_all_channels': self.karma_all_channels_cb.isChecked(),
-                
                 # General settings
+                'default_interface': self.interface_combo.currentText(),
                 'scan_timeout': self.scan_timeout_spin.value(),
                 'wpa_timeout': self.wpa_timeout_spin.value(),
                 'wpa_deauth_timeout': self.wpa_deauth_timeout_spin.value(),
@@ -777,9 +899,38 @@ class SettingsPanel(QWidget):
                 'verbose': self.verbose_cb.isChecked(),
                 'kill_processes': self.kill_processes_cb.isChecked(),
                 'random_mac': self.random_mac_cb.isChecked(),
+                
+                # WPS settings
+                'wps_pixie_dust': self.wps_pixie_cb.isChecked(),
+                'wps_pin_brute_force': self.wps_pin_cb.isChecked(),
+                'wps_use_bully': self.wps_use_bully_cb.isChecked(),
+                'wps_ignore_lock': self.wps_ignore_lock_cb.isChecked(),
+                'wps_pin_timeout': self.wps_pin_timeout_spin.value(),
+                'wps_fail_threshold': self.wps_fail_thresh_spin.value(),
+                'wps_timeout_threshold': self.wps_timeout_thresh_spin.value(),
+                
+                # Password cracking settings
+                'cracking_strategy': self.cracking_strategy_combo.currentText(),
+                'primary_wordlist': self.wordlist_combo.currentData(),
                 'use_aircrack': self.aircrack_cb.isChecked(),
                 'use_hashcat': self.hashcat_cb.isChecked(),
                 'multi_wordlist': self.multi_wordlist_cb.isChecked(),
+                
+                # KARMA settings
+                'karma_dns_spoofing': self.karma_dns_spoofing_cb.isChecked(),
+                'karma_handshake_cracking': self.karma_handshake_cracking_cb.isChecked(),
+                'karma_probe_timeout': self.karma_probe_timeout_spin.value(),
+                'karma_min_probes': self.karma_min_probes_spin.value(),
+                'karma_all_channels': self.karma_all_channels_cb.isChecked(),
+                
+                # KARMA client monitoring settings
+                'karma_client_monitoring': self.karma_client_monitoring_cb.isChecked(),
+                'karma_traffic_capture': self.karma_traffic_capture_cb.isChecked(),
+                'karma_credential_harvesting': self.karma_credential_harvesting_cb.isChecked(),
+                'karma_internet_access': self.karma_internet_access_cb.isChecked(),
+                'karma_analyze_http': self.karma_analyze_http_cb.isChecked(),
+                'karma_analyze_dns': self.karma_analyze_dns_cb.isChecked(),
+                'karma_analyze_smb': self.karma_analyze_smb_cb.isChecked(),
             }
             
             self.config_manager.save_settings(settings)
@@ -787,15 +938,60 @@ class SettingsPanel(QWidget):
         except Exception as e:
             print(f"Error saving settings: {e}")
     
+    def get_current_settings(self):
+        """Get current settings as a dictionary without saving"""
+        try:
+            return {
+                # General settings
+                'default_interface': self.interface_combo.currentText(),
+                'scan_timeout': self.scan_timeout_spin.value(),
+                'wpa_timeout': self.wpa_timeout_spin.value(),
+                'wpa_deauth_timeout': self.wpa_deauth_timeout_spin.value(),
+                'wps_timeout': self.wps_timeout_spin.value(),
+                'verbose': self.verbose_cb.isChecked(),
+                'kill_processes': self.kill_processes_cb.isChecked(),
+                'random_mac': self.random_mac_cb.isChecked(),
+                
+                # WPS settings
+                'wps_pixie_dust': self.wps_pixie_cb.isChecked(),
+                'wps_pin_brute_force': self.wps_pin_cb.isChecked(),
+                'wps_use_bully': self.wps_use_bully_cb.isChecked(),
+                'wps_ignore_lock': self.wps_ignore_lock_cb.isChecked(),
+                'wps_pin_timeout': self.wps_pin_timeout_spin.value(),
+                'wps_fail_threshold': self.wps_fail_thresh_spin.value(),
+                'wps_timeout_threshold': self.wps_timeout_thresh_spin.value(),
+                
+                # Password cracking settings
+                'cracking_strategy': self.cracking_strategy_combo.currentText(),
+                'primary_wordlist': self.wordlist_combo.currentData(),
+                'use_aircrack': self.aircrack_cb.isChecked(),
+                'use_hashcat': self.hashcat_cb.isChecked(),
+                'multi_wordlist': self.multi_wordlist_cb.isChecked(),
+                
+                # KARMA settings
+                'karma_dns_spoofing': self.karma_dns_spoofing_cb.isChecked(),
+                'karma_handshake_cracking': self.karma_handshake_cracking_cb.isChecked(),
+                'karma_probe_timeout': self.karma_probe_timeout_spin.value(),
+                'karma_min_probes': self.karma_min_probes_spin.value(),
+                'karma_all_channels': self.karma_all_channels_cb.isChecked(),
+                
+                # KARMA client monitoring settings
+                'karma_client_monitoring': self.karma_client_monitoring_cb.isChecked(),
+                'karma_traffic_capture': self.karma_traffic_capture_cb.isChecked(),
+                'karma_credential_harvesting': self.karma_credential_harvesting_cb.isChecked(),
+                'karma_internet_access': self.karma_internet_access_cb.isChecked(),
+                'karma_analyze_http': self.karma_analyze_http_cb.isChecked(),
+                'karma_analyze_dns': self.karma_analyze_dns_cb.isChecked(),
+                'karma_analyze_smb': self.karma_analyze_smb_cb.isChecked(),
+            }
+        except Exception as e:
+            print(f"Error getting current settings: {e}")
+            return {}
+    
     def connect_settings_signals(self):
         """Connect signals to auto-save settings when changed"""
-        # KARMA settings
-        self.karma_dns_spoofing_cb.toggled.connect(self.save_settings)
-        self.karma_probe_timeout_spin.valueChanged.connect(self.save_settings)
-        self.karma_min_probes_spin.valueChanged.connect(self.save_settings)
-        self.karma_all_channels_cb.toggled.connect(self.save_settings)
-        
         # General settings
+        self.interface_combo.currentTextChanged.connect(self.save_settings)
         self.scan_timeout_spin.valueChanged.connect(self.save_settings)
         self.wpa_timeout_spin.valueChanged.connect(self.save_settings)
         self.wpa_deauth_timeout_spin.valueChanged.connect(self.save_settings)
@@ -803,17 +999,56 @@ class SettingsPanel(QWidget):
         self.verbose_cb.toggled.connect(self.save_settings)
         self.kill_processes_cb.toggled.connect(self.save_settings)
         self.random_mac_cb.toggled.connect(self.save_settings)
+        
+        # WPS settings
+        self.wps_pixie_cb.toggled.connect(self.save_settings)
+        self.wps_pin_cb.toggled.connect(self.save_settings)
+        self.wps_use_bully_cb.toggled.connect(self.save_settings)
+        self.wps_ignore_lock_cb.toggled.connect(self.save_settings)
+        self.wps_pin_timeout_spin.valueChanged.connect(self.save_settings)
+        self.wps_fail_thresh_spin.valueChanged.connect(self.save_settings)
+        self.wps_timeout_thresh_spin.valueChanged.connect(self.save_settings)
+        
+        # Password cracking settings
+        self.cracking_strategy_combo.currentTextChanged.connect(self.save_settings)
+        self.wordlist_combo.currentTextChanged.connect(self.save_settings)
         self.aircrack_cb.toggled.connect(self.save_settings)
         self.hashcat_cb.toggled.connect(self.save_settings)
         self.multi_wordlist_cb.toggled.connect(self.save_settings)
+        
+        # KARMA settings
+        self.karma_dns_spoofing_cb.toggled.connect(self.save_settings)
+        self.karma_handshake_cracking_cb.toggled.connect(self.save_settings)
+        self.karma_probe_timeout_spin.valueChanged.connect(self.save_settings)
+        self.karma_min_probes_spin.valueChanged.connect(self.save_settings)
+        self.karma_all_channels_cb.toggled.connect(self.save_settings)
+        
+        # KARMA client monitoring settings
+        self.karma_client_monitoring_cb.toggled.connect(self.save_settings)
+        self.karma_traffic_capture_cb.toggled.connect(self.save_settings)
+        self.karma_credential_harvesting_cb.toggled.connect(self.save_settings)
+        self.karma_internet_access_cb.toggled.connect(self.save_settings)
+        self.karma_analyze_http_cb.toggled.connect(self.save_settings)
+        self.karma_analyze_dns_cb.toggled.connect(self.save_settings)
+        self.karma_analyze_smb_cb.toggled.connect(self.save_settings)
     
     def reset_to_defaults(self):
         """Reset all settings to default values"""
         # Reset KARMA settings
         self.karma_dns_spoofing_cb.setChecked(False)
+        self.karma_handshake_cracking_cb.setChecked(False)
         self.karma_probe_timeout_spin.setValue(60)
         self.karma_min_probes_spin.setValue(1)
         self.karma_all_channels_cb.setChecked(False)
+        
+        # Reset KARMA client monitoring settings
+        self.karma_client_monitoring_cb.setChecked(True)
+        self.karma_traffic_capture_cb.setChecked(True)
+        self.karma_credential_harvesting_cb.setChecked(True)
+        self.karma_internet_access_cb.setChecked(False)
+        self.karma_analyze_http_cb.setChecked(True)
+        self.karma_analyze_dns_cb.setChecked(True)
+        self.karma_analyze_smb_cb.setChecked(True)
         
         # Reset general settings
         self.scan_timeout_spin.setValue(60)
@@ -4026,6 +4261,16 @@ class AttackWorker(QThread):
                 Configuration.karma_min_probes = self.options.get('karma_min_probes', 1)
                 Configuration.karma_capture_all_channels = self.options.get('karma_all_channels', False)
                 Configuration.karma_dns_spoofing = self.options.get('karma_dns_spoofing', False)  # Changed default from True to False
+                Configuration.karma_handshake_cracking = self.options.get('karma_handshake_cracking', False)  # Default disabled
+                
+                # Set KARMA client monitoring settings
+                Configuration.karma_client_monitoring = self.options.get('karma_client_monitoring', True)
+                Configuration.karma_traffic_capture = self.options.get('karma_traffic_capture', True)
+                Configuration.karma_credential_harvesting = self.options.get('karma_credential_harvesting', True)
+                Configuration.karma_internet_access = self.options.get('karma_internet_access', False)
+                Configuration.karma_analyze_http = self.options.get('karma_analyze_http', True)
+                Configuration.karma_analyze_dns = self.options.get('karma_analyze_dns', True)
+                Configuration.karma_analyze_smb = self.options.get('karma_analyze_smb', True)
                 
                 # Debug: Log what we're setting
                 self.log_message.emit(f"[KARMA] Setting Configuration values:")
@@ -4033,6 +4278,14 @@ class AttackWorker(QThread):
                 self.log_message.emit(f"[KARMA]   karma_min_probes: {Configuration.karma_min_probes}")
                 self.log_message.emit(f"[KARMA]   karma_capture_all_channels: {Configuration.karma_capture_all_channels}")
                 self.log_message.emit(f"[KARMA]   karma_dns_spoofing: {Configuration.karma_dns_spoofing}")
+                self.log_message.emit(f"[KARMA]   karma_handshake_cracking: {Configuration.karma_handshake_cracking}")
+                self.log_message.emit(f"[KARMA]   karma_client_monitoring: {Configuration.karma_client_monitoring}")
+                self.log_message.emit(f"[KARMA]   karma_traffic_capture: {Configuration.karma_traffic_capture}")
+                self.log_message.emit(f"[KARMA]   karma_credential_harvesting: {Configuration.karma_credential_harvesting}")
+                self.log_message.emit(f"[KARMA]   karma_internet_access: {Configuration.karma_internet_access}")
+                self.log_message.emit(f"[KARMA]   karma_analyze_http: {Configuration.karma_analyze_http}")
+                self.log_message.emit(f"[KARMA]   karma_analyze_dns: {Configuration.karma_analyze_dns}")
+                self.log_message.emit(f"[KARMA]   karma_analyze_smb: {Configuration.karma_analyze_smb}")
                 
                 # Use dynamic interface detection for KARMA attack
                 from .utils import SystemUtils
@@ -4065,6 +4318,9 @@ class AttackWorker(QThread):
                 self.Configuration.karma_probe_interface = interface
             
             attack = AttackKARMA(target)
+            
+            # Store attack instance for GUI status monitoring
+            self.current_attack = attack
             
             # Set the running flag on the attack instance
             attack.running = self.running

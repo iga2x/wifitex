@@ -75,7 +75,25 @@ class Configuration(object):
         cls.karma_auto_connect = True  # Enable automatic victim connection
         cls.karma_capture_all_channels = False  # Capture probes from all channels
         cls.karma_min_probes = 1  # Minimum number of probe requests to capture before starting attack
-        cls.karma_dns_spoofing = False  # Enable DNS spoofing for Layer 7 attacks (disabled by default)
+        cls.karma_dns_spoofing = True  # Enable DNS spoofing for Layer 7 attacks (enabled for credential harvesting)
+        cls.karma_handshake_cracking = True  # Enable handshake capture and cracking (enabled by default)
+        cls.karma_encryption = 'mixed'  # AP encryption: 'wpa', 'wpa2', 'wpa3', 'mixed', 'none' (default: 'mixed')
+        
+        # KARMA Client Monitoring & Data Access Settings
+        cls.karma_client_monitoring = True  # Enable real-time client monitoring
+        cls.karma_traffic_capture = True  # Capture all client traffic to PCAP files
+        cls.karma_credential_harvesting = True  # Enable credential harvesting from traffic
+        cls.karma_internet_access = True  # Allow clients internet access for realistic traffic and HTTP data capture
+        cls.karma_analyze_http = True  # Analyze HTTP/HTTPS traffic for credentials
+        cls.karma_analyze_dns = True  # Monitor DNS queries
+        cls.karma_analyze_smb = True  # Capture SMB credentials
+        
+        # KARMA Attack Save Directories
+        cls.karma_captures_dir = 'karma_captures'  # Main KARMA captures directory
+        cls.karma_probes_dir = 'karma_captures/probes'  # Probe request captures
+        cls.karma_handshakes_dir = 'karma_captures/handshakes'  # KARMA handshakes
+        cls.karma_credentials_dir = 'karma_captures/credentials'  # Credential harvests
+        cls.karma_traffic_dir = 'karma_captures/traffic'  # Client traffic
 
         # WPA/WPA2/WPA3 variables
 

