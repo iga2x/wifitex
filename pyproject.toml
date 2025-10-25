@@ -94,8 +94,7 @@ wifitex = ["*.txt", "*.md", "*.png", "*.svg", "*.ico", "*.xpm"]
     "GUI_README.md", 
     "PMKID.md", 
     "EVILTWIN.md",
-    "TODO.md",
-    "MULTI_INTERFACE_KARMA.md"
+    "TODO.md"
 ]
 "share/man/man1" = [
     "man/wifitex.1", 
