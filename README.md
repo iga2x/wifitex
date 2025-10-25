@@ -108,6 +108,11 @@ Choose your preferred installation method:
 ```bash
 git clone https://github.com/iga2x/wifitex.git
 cd wifitex
+
+# Install with latest features (KARMA GUI monitoring, etc.)
+sudo bash install_latest.sh
+
+# Or use traditional installer
 sudo ./install.sh
 ```
 
