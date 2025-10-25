@@ -815,7 +815,7 @@ class NetworkUtils:
                 cmd.extend(['-c', str(channel)])
                 
             if five_ghz:
-                cmd.extend(['-b', 'abg'])
+                cmd.extend(['--band', 'a'])
                 
             # Run scan for a short time
             returncode, stdout, stderr = SystemUtils.run_command(cmd, timeout=10)

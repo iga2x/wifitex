@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,14 +9,13 @@ description = "Wireless Network Auditor for Linux"
 authors = [
     {name = "iga2x", email = "mdpoo2@gmail.com"}
 ]
-license = {text = "GNU GPLv2"}
+license = {text = "GPL-2.0-only"}
 readme = "README.md"
 requires-python = ">=3.6"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.6",

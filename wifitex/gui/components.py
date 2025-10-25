@@ -1706,8 +1706,8 @@ class UnifiedScanWorker(QThread):
             original_encryption_filter = Configuration.encryption_filter
             Configuration.encryption_filter = []  # Show all networks
             
-            # Force 2.4GHz band scanning (same as CLI)
-            Configuration.five_ghz = False
+            # Keep user's 5GHz setting - don't override it
+            # Configuration.five_ghz is already set from self.five_ghz above
             
             # Basic setup
             try:
