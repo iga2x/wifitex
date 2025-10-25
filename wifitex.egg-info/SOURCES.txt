@@ -2,7 +2,6 @@ EVILTWIN.md
 GUI_README.md
 LICENSE
 MANIFEST.in
-MULTI_INTERFACE_KARMA.md
 PMKID.md
 README.md
 TODO.md
@@ -24,6 +23,7 @@ icons/wifitex-48x48.png
 icons/wifitex-64x64.png
 icons/wifitex-96x96.png
 icons/wifitex.ico
+icons/wifitex.svg
 icons/wifitex.xpm
 man/wifitex-gui.1
 man/wifitex.1

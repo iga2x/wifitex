@@ -33,25 +33,25 @@ License-File: LICENSE
 Requires-Dist: psutil>=5.9.6
 Requires-Dist: requests>=2.31.0
 Provides-Extra: gui
-Requires-Dist: PyQt6>=6.6.0; extra == "gui"
 Requires-Dist: PyQt6-Qt6>=6.6.0; extra == "gui"
 Requires-Dist: PyQt6-sip>=13.6.0; extra == "gui"
-Requires-Dist: psutil>=5.9.6; extra == "gui"
-Requires-Dist: requests>=2.31.0; extra == "gui"
+Requires-Dist: PyQt6>=6.6.0; extra == "gui"
 Requires-Dist: netifaces>=0.11.0; extra == "gui"
-Requires-Dist: watchdog>=3.0.0; extra == "gui"
+Requires-Dist: psutil>=5.9.6; extra == "gui"
 Requires-Dist: qdarkstyle>=3.2.0; extra == "gui"
 Requires-Dist: qtawesome>=1.3.0; extra == "gui"
+Requires-Dist: requests>=2.31.0; extra == "gui"
+Requires-Dist: watchdog>=3.0.0; extra == "gui"
 Provides-Extra: all
-Requires-Dist: PyQt6>=6.6.0; extra == "all"
 Requires-Dist: PyQt6-Qt6>=6.6.0; extra == "all"
 Requires-Dist: PyQt6-sip>=13.6.0; extra == "all"
-Requires-Dist: psutil>=5.9.6; extra == "all"
-Requires-Dist: requests>=2.31.0; extra == "all"
+Requires-Dist: PyQt6>=6.6.0; extra == "all"
 Requires-Dist: netifaces>=0.11.0; extra == "all"
-Requires-Dist: watchdog>=3.0.0; extra == "all"
+Requires-Dist: psutil>=5.9.6; extra == "all"
 Requires-Dist: qdarkstyle>=3.2.0; extra == "all"
 Requires-Dist: qtawesome>=1.3.0; extra == "all"
+Requires-Dist: requests>=2.31.0; extra == "all"
+Requires-Dist: watchdog>=3.0.0; extra == "all"
 Dynamic: author
 Dynamic: home-page
 Dynamic: license-file
