@@ -80,7 +80,20 @@ pip3 install --break-system-packages psutil requests netifaces watchdog qdarksty
 
 # Install Wifitex
 echo "📦 Installing Wifitex..."
-pip3 install --break-system-packages -e .
+# Clean previous builds
+rm -rf build/ dist/ *.egg-info/ 2>/dev/null || true
+
+# Build package properly
+echo "🔨 Building Wifitex package..."
+python3 setup.py build
+
+# Install package (NOT editable mode - this ensures all files are installed)
+echo "📦 Installing Wifitex package..."
+python3 setup.py install --force
+
+# Clean up build artifacts
+rm -rf build/ dist/ *.egg-info/ wifitex.egg-info/ 2>/dev/null || true
+echo "✓ Installation complete"
 
 # Precompile Python code for faster startup
 echo "⚡ Precompiling Python code for faster startup..."
