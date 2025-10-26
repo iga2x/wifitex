@@ -2763,25 +2763,35 @@ class AttackKARMA(Attack):
             return False
     
     def get_ap_bssid_for_client(self, client_mac):
-        """Get the AP BSSID for a specific client - CRITICAL FIX"""
+        """Get the REAL AP BSSID that the client is trying to connect to (for handshake capture)"""
         try:
-            # In KARMA attack, clients connect to our rogue AP
-            # Get the BSSID of our rogue interface
-            rogue_bssid = self._get_rogue_ap_bssid()
-            if rogue_bssid:
-                Color.pl('{+} {C}Client {G}%s{W} connected to our rogue AP {G}%s{W}' % (client_mac, rogue_bssid))
-                return rogue_bssid
+            # In KARMA, client probes reveal which real AP they want to connect to
+            # Check the client's probe requests to find their preferred network
+            if hasattr(self, 'client_probes') and client_mac in self.client_probes:
+                for ssid in self.client_probes[client_mac]:
+                    # Find this SSID in real_networks
+                    if hasattr(self, 'real_networks') and self.real_networks:
+                        for network in self.real_networks:
+                            if hasattr(network, 'essid') and network.essid == ssid:
+                                Color.pl('{+} {C}Client {G}%s{W} wants to connect to {G}%s{W} (BSSID: {G}%s{W})' % 
+                                        (client_mac, ssid, network.bssid))
+                                return network.bssid
             
-            # Fallback: check real networks for this client
+            # Fallback: check real networks for any client matching this MAC
             if hasattr(self, 'real_networks') and self.real_networks:
                 for network in self.real_networks:
                     if hasattr(network, 'clients'):
                         for client in network.clients:
                             if client.station == client_mac:
+                                Color.pl('{+} {C}Found client {G}%s{W} on network {G}%s{W}' % 
+                                        (client_mac, network.bssid))
                                 return network.bssid
             
             # Last resort: scan for APs with this client
-            return self.scan_for_ap_with_client(client_mac)
+            ap_bssid = self.scan_for_ap_with_client(client_mac)
+            if ap_bssid:
+                Color.pl('{+} {C}Scanned and found AP {G}%s{W} for client {G}%s{W}' % (ap_bssid, client_mac))
+            return ap_bssid
             
         except Exception as e:
             if Configuration.verbose > 1:
