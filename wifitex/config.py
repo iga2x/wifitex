@@ -221,15 +221,20 @@ class Configuration(object):
             
             while True:
                 try:
-                    choice = input('{+} {C}Select interface (1-%d): {W}' % len(interfaces))
+                    choice = input('{+} {C}Select interface (1-%d): {W}' % len(interfaces)).strip()
+                    if not choice:
+                        Color.pl('{!} {R}Please enter a number{W}')
+                        continue
                     choice_idx = int(choice) - 1
                     if 0 <= choice_idx < len(interfaces):
                         target_interface = interfaces[choice_idx]
                         break
                     else:
-                        Color.pl('{!} {R}Invalid choice. Please select 1-%d{W}' % len(interfaces))
-                except (ValueError, KeyboardInterrupt):
-                    Color.pl('{!} {R}Invalid input{W}')
+                        Color.pl('{!} {R}Invalid choice. Please select a number between 1-%d{W}' % len(interfaces))
+                except ValueError:
+                    Color.pl('{!} {R}Invalid input. Please enter a number{W}')
+                except KeyboardInterrupt:
+                    Color.pl('\n{!} {O}Interface selection cancelled{W}')
                     return None
         
         # Enable monitor mode using NetworkUtils (same as GUI)
