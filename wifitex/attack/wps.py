@@ -116,51 +116,21 @@ class AttackWPS(Attack):
 
     def run_bully(self):
         '''Run WPS attack using Bully tool'''
-        try:
-            Color.pl('\n{+} {C}Starting WPS attack with Bully{W}')
-            bully = Bully(self.target, pixie_dust=self.pixie_dust)
-            bully.run()
-            bully.stop()
-            self.crack_result = bully.crack_result
-            self.success = self.crack_result is not None
-            
-            if self.success:
-                Color.pl('\n{+} {G}WPS attack successful with Bully{W}')
-            else:
-                Color.pl('\n{!} {R}WPS attack failed with Bully{W}')
-                
-            return self.success
-            
-        except Exception as e:
-            Color.pl('\n{!} {R}Error running Bully: {O}%s{W}' % str(e))
-            if Configuration.verbose > 0:
-                Color.pexception(e)
-            self.success = False
-            return self.success
+        bully = Bully(self.target, pixie_dust=self.pixie_dust)
+        bully.run()
+        bully.stop()
+        self.crack_result = bully.crack_result
+        self.success = self.crack_result is not None
+        return self.success
 
 
     def run_reaver(self):
         '''Run WPS attack using Reaver tool'''
-        try:
-            Color.pl('\n{+} {C}Starting WPS attack with Reaver{W}')
-            reaver = Reaver(self.target, pixie_dust=self.pixie_dust)
-            reaver.run()
-            self.crack_result = reaver.crack_result
-            self.success = self.crack_result is not None
-            
-            if self.success:
-                Color.pl('\n{+} {G}WPS attack successful with Reaver{W}')
-            else:
-                Color.pl('\n{!} {R}WPS attack failed with Reaver{W}')
-                
-            return self.success
-            
-        except Exception as e:
-            Color.pl('\n{!} {R}Error running Reaver: {O}%s{W}' % str(e))
-            if Configuration.verbose > 0:
-                Color.pexception(e)
-            self.success = False
-            return self.success
+        reaver = Reaver(self.target, pixie_dust=self.pixie_dust)
+        reaver.run()
+        self.crack_result = reaver.crack_result
+        self.success = self.crack_result is not None
+        return self.success
 
     def get_attack_type_description(self):
         '''Get description of the attack type being performed'''
