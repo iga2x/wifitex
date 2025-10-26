@@ -77,11 +77,12 @@ setup(
     },
     
     # Scripts
-    scripts=['bin/wifitex'],
+    scripts=['bin/wifitex', 'wifitex-gui', 'wifitex-gui-desktop'],
     
     # Data files
     data_files=[
         ('share/applications', ['data/wifitex-gui.desktop']),
+        ('share/polkit-1/actions', ['data/wifitex-gui.policy']),
         ('share/pixmaps', [
             'icons/wifitex-256x256.png',
             'icons/wifitex-128x128.png', 

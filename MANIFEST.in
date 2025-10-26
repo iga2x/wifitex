@@ -9,8 +9,9 @@ include requirements-gui.txt
 # Include data files
 include wordlist-top4800-probable.txt
 
-# Include desktop files
+# Include desktop files and policies
 include data/wifitex-gui.desktop
+include data/wifitex-gui.policy
 
 # Include all icons
 recursive-include icons *.png *.svg *.ico *.xpm
@@ -24,7 +25,7 @@ include install.py
 include uninstall.py
 
 # Include launcher scripts
-include wifitex-gui
+include wifitex-gui wifitex-gui-desktop
 
 # Include test files
 include test_gui.py

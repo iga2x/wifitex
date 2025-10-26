@@ -74,6 +74,7 @@ wifitex = ["*.txt", "*.md", "*.png", "*.svg", "*.ico", "*.xpm"]
 # Data files for installation
 [tool.setuptools.data-files]
 "share/applications" = ["data/wifitex-gui.desktop"]
+"share/polkit-1/actions" = ["data/wifitex-gui.policy"]
 "share/pixmaps" = [
     "icons/wifitex-256x256.png",
     "icons/wifitex-128x128.png", 

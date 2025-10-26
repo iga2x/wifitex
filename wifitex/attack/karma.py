@@ -6415,6 +6415,16 @@ def application(environ, start_response):
                     Color.pl('{+} {C}Created directory: {G}%s{W}' % directory)
             except Exception as e:
                 Color.pl('{!} {R}Error creating directory %s: {O}%s{W}' % (directory, str(e)))
+        
+        # Check if directories are writable by current user
+        for directory in directories:
+            if os.path.exists(directory):
+                if not os.access(directory, os.W_OK):
+                    current_owner = os.stat(directory).st_uid
+                    import getpass
+                    current_user = getpass.getuser()
+                    Color.pl('{!} {R}WARNING: Directory {C}%s{W} exists but is not writable by current user {C}%s{W}' % (directory, current_user))
+                    Color.pl('{!} {O}To fix this, run: sudo chown -R %s:%s %s{W}' % (current_user, current_user, directory))
 
     def wait_for_file_accessibility(self, filepath, max_wait=10):
         """Wait for a file to become accessible (not locked by another process)"""
