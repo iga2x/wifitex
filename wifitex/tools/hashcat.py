@@ -8,6 +8,8 @@ from ..util.color import Color
 
 import os
 import subprocess
+from subprocess import PIPE, DEVNULL
+import sys
 
 
 class Hashcat(Dependency):
@@ -260,7 +262,8 @@ class Hashcat(Dependency):
         # Build command
         command = [
             'hashcat',
-            '--quiet',
+            '--status',           # Enable status updates
+            '--status-timer=10',  # Update every 10 seconds
             '-m', '22000',  # Modern WPA-PBKDF2-PMKID+EAPOL format
             '-a', attack_mode,  # Brute force attack mode
             hccapx_file
@@ -293,7 +296,8 @@ class Hashcat(Dependency):
         if show_command:
             Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
             
-        process = Process(command)
+        # Create process with stderr=sys.stderr to show real-time progress
+        process = Process(command, stdout=PIPE, stderr=sys.stderr)  # type: ignore[arg-type]
         stdout, stderr = process.get_output()
         
         key = None
@@ -317,7 +321,8 @@ class Hashcat(Dependency):
         # Build command
         command = [
             'hashcat',
-            '--quiet',
+            '--status',           # Enable status updates
+            '--status-timer=10',  # Update every 10 seconds
             '-m', '16800',  # WPA-PMKID-PBKDF2
             '-a', attack_mode,
             pmkid_file
@@ -347,7 +352,8 @@ class Hashcat(Dependency):
         if verbose:
             Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
             
-        hashcat_proc = Process(command)
+        # Create process with stderr=sys.stderr to show real-time progress  
+        hashcat_proc = Process(command, stdout=PIPE, stderr=sys.stderr)  # type: ignore[arg-type]
         hashcat_proc.wait()
         stdout = hashcat_proc.stdout()
         
