@@ -128,87 +128,135 @@ class Aircrack(Dependency):
 
 
     @staticmethod
+    def get_wordlists():
+        """Get list of wordlists to try in order"""
+        wordlists = []
+        
+        # Add primary wordlist first
+        if Configuration.wordlist and os.path.exists(Configuration.wordlist):
+            wordlists.append(Configuration.wordlist)
+        
+        # Add rockyou.txt if it exists
+        rockyou_paths = [
+            '/usr/share/wordlists/rockyou.txt',
+            '/usr/share/wordlists/rockyou.txt.gz',
+            './wordlists/rockyou.txt',
+            'rockyou.txt'
+        ]
+        for path in rockyou_paths:
+            if os.path.exists(path):
+                wordlists.append(path)
+                break
+        
+        # Add other common wordlists
+        additional_wordlists = [
+            './wordlist-top4800-probable.txt',
+            '/usr/share/dict/wordlist-top4800-probable.txt',
+            '/usr/share/wfuzz/wordlist/fuzzdb/wordlists-user-passwd/passwds/phpbb.txt',
+            '/usr/share/wordlists/fern-wifi/common.txt'
+        ]
+        for wlist in additional_wordlists:
+            if os.path.exists(wlist) and wlist not in wordlists:
+                wordlists.append(wlist)
+        
+        return wordlists
+
+    @staticmethod
     def crack_handshake(handshake, show_command=False):
         from ..util.color import Color
         from ..util.timer import Timer
         '''Tries to crack a handshake. Returns WPA key if found, otherwise None.'''
 
-        key_file = Configuration.temp('wpakey.txt')
-        command = [
-            'aircrack-ng',
-            '-a', '2',
-            '-w', Configuration.wordlist,
-            '--bssid', handshake.bssid,
-            '-l', key_file,
-            handshake.capfile
-        ]
-        if show_command:
-            Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
-        crack_proc = Process(command)
+        # Get list of wordlists to try
+        wordlists = Aircrack.get_wordlists()
+        
+        key = None
+        for wordlist in wordlists:
+            if not os.path.exists(wordlist):
+                continue
+            
+            if show_command:
+                Color.pl('{+} {C}Trying wordlist: {G}%s{W}' % os.path.basename(wordlist))
+            
+            key_file = Configuration.temp('wpakey.txt')
+            command = [
+                'aircrack-ng',
+                '-a', '2',
+                '-w', wordlist,
+                '--bssid', handshake.bssid,
+                '-l', key_file,
+                handshake.capfile
+            ]
+            if show_command:
+                Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
+            crack_proc = Process(command)
 
-        # Report progress of cracking
-        aircrack_nums_re = re.compile(r'(\d+)/(\d+) keys tested.*\(([\d.]+)\s+k/s', re.IGNORECASE)
-        aircrack_key_re  = re.compile(r'Current passphrase:\s*([^\s].*[^\s])\s*$', re.IGNORECASE)
-        num_tried = num_total = 0
-        percent = num_kps = 0.0
-        eta_str = 'unknown'
-        current_key = ''
-        try:
-            while crack_proc.poll() is None:
-                # read a line (bytes), decode safely
-                try:
-                    raw_line = crack_proc.stdoutln()
-                    if not raw_line:
-                        # process may have ended or no more output right now
-                        continue
-                    line = raw_line.decode('utf-8', 'ignore')
-                except Exception:
-                    continue
-
-                match_nums = aircrack_nums_re.search(line)
-                match_keys = aircrack_key_re.search(line)
-                if match_nums:
-                    try:
-                        num_tried = int(match_nums.group(1))
-                        num_total = int(match_nums.group(2))
-                        num_kps = float(match_nums.group(3))
-                    except (ValueError, ZeroDivisionError):
-                        num_kps = 0.0
-
-                    if num_kps > 0.0 and num_total >= num_tried:
-                        eta_seconds = (num_total - num_tried) / num_kps
-                        eta_str = Timer.secs_to_str(eta_seconds)
-                        percent = 100.0 * float(num_tried) / float(num_total) if num_total > 0 else 0.0
-                    else:
-                        eta_str = 'unknown'
-                        percent = 0.0
-                elif match_keys:
-                    current_key = match_keys.group(1)
-                else:
-                    continue
-
-                status = '\r{+} {C}Cracking WPA Handshake: %0.2f%%{W}' % percent
-                status += ' ETA: {C}%s{W}' % eta_str
-                status += ' @ {C}%0.1fkps{W}' % num_kps
-                status += ' (current key: {C}%s{W})' % current_key
-                Color.clear_entire_line()
-                Color.p(status)
-        finally:
-            # ensure we print a newline after progress
-            Color.pl('')
-
-        # Check crack result
-        if os.path.exists(key_file):
+            # Report progress of cracking
+            aircrack_nums_re = re.compile(r'(\d+)/(\d+) keys tested.*\(([\d.]+)\s+k/s', re.IGNORECASE)
+            aircrack_key_re  = re.compile(r'Current passphrase:\s*([^\s].*[^\s])\s*$', re.IGNORECASE)
+            num_tried = num_total = 0
+            percent = num_kps = 0.0
+            eta_str = 'unknown'
+            current_key = ''
             try:
-                with open(key_file, 'r') as fid:
-                    key = fid.read().strip()
-                os.remove(key_file)
-            except Exception:
-                key = None
+                while crack_proc.poll() is None:
+                    # read a line (bytes), decode safely
+                    try:
+                        raw_line = crack_proc.stdoutln()
+                        if not raw_line:
+                            # process may have ended or no more output right now
+                            continue
+                        line = raw_line.decode('utf-8', 'ignore')
+                    except Exception:
+                        continue
 
-            return key
-        else:
-            return None
+                    match_nums = aircrack_nums_re.search(line)
+                    match_keys = aircrack_key_re.search(line)
+                    if match_nums:
+                        try:
+                            num_tried = int(match_nums.group(1))
+                            num_total = int(match_nums.group(2))
+                            num_kps = float(match_nums.group(3))
+                        except (ValueError, ZeroDivisionError):
+                            num_kps = 0.0
+
+                        if num_kps > 0.0 and num_total >= num_tried:
+                            eta_seconds = (num_total - num_tried) / num_kps
+                            eta_str = Timer.secs_to_str(eta_seconds)
+                            percent = 100.0 * float(num_tried) / float(num_total) if num_total > 0 else 0.0
+                        else:
+                            eta_str = 'unknown'
+                            percent = 0.0
+                    elif match_keys:
+                        current_key = match_keys.group(1)
+                    else:
+                        continue
+
+                    status = '\r{+} {C}Cracking WPA Handshake: %0.2f%%{W}' % percent
+                    status += ' ETA: {C}%s{W}' % eta_str
+                    status += ' @ {C}%0.1fkps{W}' % num_kps
+                    status += ' (current key: {C}%s{W})' % current_key
+                    Color.clear_entire_line()
+                    Color.p(status)
+            finally:
+                # ensure we print a newline after progress
+                Color.pl('')
+
+            # Check crack result
+            if os.path.exists(key_file):
+                try:
+                    with open(key_file, 'r') as fid:
+                        key = fid.read().strip()
+                    os.remove(key_file)
+                except Exception:
+                    key = None
+                
+                if key:
+                    if show_command:
+                        Color.pl('{+} {G}Password found using %s!{W}' % os.path.basename(wordlist))
+                    return key
+        
+        return None
 
 
 if __name__ == '__main__':
