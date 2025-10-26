@@ -49,7 +49,7 @@ class Configuration(object):
         cls.target_bssid = None # User-defined AP BSSID
         cls.ignore_essid = None # ESSIDs to ignore
         cls.clients_only = False # Only show targets that have associated clients
-        cls.five_ghz = False # Scan 5Ghz channels
+        cls.five_ghz = True # Scan 5Ghz channels by default
         cls.show_bssids = False # Show BSSIDs in targets list
         cls.random_mac = False # Should generate a random Mac address at startup.
         cls.no_deauth = False # Deauth hidden networks & WPA handshake targets
@@ -99,7 +99,7 @@ class Configuration(object):
 
         # WPA variables
         cls.wpa_filter = False # Only attack WPA networks
-        cls.wpa_deauth_timeout = 15 # Wait time between deauths
+        cls.wpa_deauth_timeout = 10 # Wait time between deauths
         cls.wpa_attack_timeout = 500 # Wait time before failing
         cls.wpa_handshake_dir = 'hs' # Dir to store handshakes
         cls.wpa_strip_handshake = False # Strip non-handshake packets
@@ -153,7 +153,7 @@ class Configuration(object):
         cls.wps_pin     = True
         cls.wps_ignore_lock = False  # Skip WPS PIN attack if AP is locked.
         cls.wps_pixie_timeout = 300      # Seconds to wait for PIN before WPS Pixie attack fails
-        cls.wps_pin_timeout = 1800       # Seconds to wait for PIN attack (30 minutes)
+        cls.wps_pin_timeout = 600        # Seconds to wait for PIN attack (10 minutes)
         cls.wps_fail_threshold = 100     # Max number of failures
         cls.wps_timeout_threshold = 100  # Max number of timeouts
         cls.wps_use_standalone_pixiewps = True  # Use standalone pixiewps as fallback
