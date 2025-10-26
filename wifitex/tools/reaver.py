@@ -119,14 +119,35 @@ class Reaver(Attack, Dependency):
 
             # Loop while reaver is running
             last_status_update = 0
+            last_target_refresh = 0
+            consecutive_not_found = 0
+            stdout = ''  # Initialize stdout to avoid NameError
+            
             while self.crack_result is None and self.reaver_proc.poll() is None:
 
                 # Refresh target information (power) - less frequently
                 current_time = time.time()
-                if current_time - last_status_update >= 1:  # Update every 1 second instead of 0.5
-                    self.target = self.wait_for_target(airodump)
-
-                    # Update based on reaver output
+                
+                # Try to refresh target info, but don't fail if target temporarily disappears
+                if current_time - last_target_refresh >= 3:  # Update every 3 seconds
+                    try:
+                        new_target = self.wait_for_target(airodump)
+                        self.target = new_target  # Update power level
+                        consecutive_not_found = 0  # Reset counter
+                    except Exception as e:
+                        # Target temporarily not found - keep trying
+                        consecutive_not_found += 1
+                        if Configuration.verbose > 1:
+                            Color.pl('\n{!} {O}Target temporarily not visible in airodump (attempt %d){W}' % consecutive_not_found)
+                        
+                        # Only fail if target is missing for too long
+                        if consecutive_not_found > 10:
+                            raise AttackError('Could not find target in airodump after 10 attempts')
+                    
+                    last_target_refresh = current_time
+                
+                # Update based on reaver output - more frequently
+                if current_time - last_status_update >= 1:  # Update every 1 second
                     stdout = self.get_output()
                     self.state = self.parse_state(stdout)
                     self.parse_failure(stdout)
