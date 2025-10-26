@@ -50,6 +50,8 @@ class Configuration(object):
         cls.ignore_essid = None # ESSIDs to ignore
         cls.clients_only = False # Only show targets that have associated clients
         cls.five_ghz = True # Scan 5Ghz channels by default
+        cls.six_ghz = True # Scan 6Ghz channels (WiFi 6E) by default
+        cls.seven_ghz = True # Scan 7Ghz channels (future WiFi 7) by default
         cls.show_bssids = False # Show BSSIDs in targets list
         cls.random_mac = False # Should generate a random Mac address at startup.
         cls.no_deauth = False # Deauth hidden networks & WPA handshake targets

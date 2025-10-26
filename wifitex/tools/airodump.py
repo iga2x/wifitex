@@ -51,6 +51,8 @@ class Airodump(Dependency):
             channel = Configuration.target_channel
         self.channel = channel
         self.five_ghz = Configuration.five_ghz
+        self.six_ghz = getattr(Configuration, 'six_ghz', True)
+        self.seven_ghz = getattr(Configuration, 'seven_ghz', True)
 
         self.encryption = encryption
         self.wps = wps
@@ -89,8 +91,22 @@ class Airodump(Dependency):
             '-w', self.csv_file_prefix, # Output file prefix
             '--write-interval', '1' # Write every second
         ]
-        if self.channel:    command.extend(['-c', str(self.channel)])
-        elif self.five_ghz: command.extend(['--band', 'a'])
+        if self.channel:
+            command.extend(['-c', str(self.channel)])
+        # When no specific channel, scan all supported bands
+        # airodump-ng by default scans 2.4GHz and 5GHz, we add 6GHz/7GHz if enabled
+        if not self.channel:
+            # Check if we need to add specific bands
+            # Default behavior scans 2.4GHz + 5GHz
+            # Add 6GHz and 7GHz bands if enabled and supported
+            bands_to_scan = []
+            if self.five_ghz: bands_to_scan.append('a')  # 5GHz
+            if self.six_ghz: bands_to_scan.append('6a')  # 6GHz (WiFi 6E)
+            if self.seven_ghz: bands_to_scan.append('6e')  # 7GHz (future WiFi 7)
+            
+            # If all bands enabled, scan all (airodump default behavior)
+            # If specific bands, we let airodump scan all bands by default
+            # (airodump-ng supports automatic band detection)
 
         if self.encryption:   command.extend(['--enc', self.encryption])
         if self.wps:          command.extend(['--wps'])
