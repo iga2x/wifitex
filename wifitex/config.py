@@ -111,6 +111,15 @@ class Configuration(object):
         cls.use_pmkid_only = False  # Only use PMKID Capture+Crack attack
         cls.pmkid_timeout = 60  # Time to wait for PMKID capture (increased from 30)
 
+        # Brute force attack variables
+        cls.use_brute_force = False  # Enable brute force attack mode
+        cls.brute_force_mode = '3'  # Attack mode: 0=dict, 3=brute, 6=hybrid dict+mask, 7=hybrid mask+dict
+        cls.brute_force_mask = '?a?a?a?a?a?a?a?a'  # Default mask: 8 chars all charset
+        cls.brute_force_increment = False  # Increment mask length automatically
+        cls.brute_force_min_length = 8  # Minimum password length for brute force
+        cls.brute_force_max_length = 12  # Maximum password length for brute force
+        cls.brute_force_timeout = 3600  # Max time per brute force attempt (1 hour)
+        
         # Default dictionary for cracking
         cls.cracked_file = 'cracked.txt'
         cls.wordlist = None
@@ -404,6 +413,23 @@ class Configuration(object):
         if args.wpa_strip_handshake:
             cls.wpa_strip_handshake = True
             Color.pl('{+} {C}option:{W} will {G}strip{W} non-handshake packets')
+
+        # Brute force attack arguments
+        if hasattr(args, 'use_brute_force') and args.use_brute_force:
+            cls.use_brute_force = True
+            Color.pl('{+} {C}option:{W} using {O}brute force{W} attack mode')
+        
+        if hasattr(args, 'brute_force_mode') and args.brute_force_mode:
+            cls.brute_force_mode = args.brute_force_mode
+            Color.pl('{+} {C}option:{W} brute force mode {G}%s{W}' % args.brute_force_mode)
+        
+        if hasattr(args, 'brute_force_mask') and args.brute_force_mask:
+            cls.brute_force_mask = args.brute_force_mask
+            Color.pl('{+} {C}option:{W} brute force mask {G}%s{W}' % args.brute_force_mask)
+        
+        if hasattr(args, 'brute_force_timeout') and args.brute_force_timeout:
+            cls.brute_force_timeout = args.brute_force_timeout
+            Color.pl('{+} {C}option:{W} brute force timeout {G}%d seconds{W}' % args.brute_force_timeout)
 
     @classmethod
     def parse_wps_args(cls, args):

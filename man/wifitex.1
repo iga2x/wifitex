@@ -18,12 +18,11 @@ wireless access point (router). These methods include:
 .B WPS Attacks
 The Offline Pixie-Dust attack and Online Brute-Force PIN attack
 .TP
-.B WPA/2 Attacks  
+.B WPA/WPA2 Attacks
 WPA Handshake Capture and PMKID Hash Capture with offline cracking
 .TP
-.B WEP Attacks
-Various known attacks against WEP, including fragmentation, chop-chop, 
-aireplay, etc.
+.B KARMA Attack
+Enhanced Evil Twin with PNL (Preferred Network List) capture and multi-interface support
 
 .SH OPTIONS
 .TP
@@ -54,11 +53,11 @@ Never use WPS attacks
 .B --wpa-only
 Only use WPA handshake attacks
 .TP
-.B --wep-only
-Only use WEP attacks
+.B --pmkid-only
+Only use PMKID hash capture attacks
 .TP
-.B --pmkid
-Use PMKID hash capture attack
+.B --pmkid-timeout <seconds>
+Time to wait for PMKID capture (default: 60)
 .TP
 .B --no-pixie
 Skip WPS Pixie-Dust attack
@@ -73,7 +72,7 @@ Use bully instead of reaver for WPS attacks
 Use reaver for WPS attacks (default)
 .TP
 .B --crack
-Crack handshakes/PMKID hashes using wordlist
+Crack captured handshakes/PMKID hashes using wordlist
 .TP
 .B --cracked
 Show previously cracked networks
@@ -81,13 +80,37 @@ Show previously cracked networks
 .B --check <file>
 Check if .cap file contains a handshake
 .TP
-.B --wordlist <file>
-Custom wordlist for cracking
+.B --dict, --wordlist <file>
+Custom wordlist file for cracking (auto-detects wordlists from wifitex/wordlists/)
+.TP
+.B --karma
+Use KARMA attack (Enhanced Evil Twin with PNL capture)
+.TP
+.B --karma-probe-timeout <seconds>
+Time to capture probe requests before KARMA attack (default: 30)
+.TP
+.B --karma-rogue-iface <interface>
+Interface for rogue AP (default: same as scan interface)
+.TP
+.B --karma-probe-iface <interface>
+Interface for capturing probe requests (default: same as scan interface)
+.TP
+.B --karma-min-probes <num>
+Minimum probe requests before starting attack (default: 3)
+.TP
+.B --karma-all-channels
+Capture probe requests from all channels (default: current channel only)
+.TP
+.B --enable-monitor
+Enable monitor mode on interface and exit
+.TP
+.B --disable-monitor
+Disable monitor mode on interface and exit
 .TP
 .B --kill
 Kill processes that conflict with wireless operations
 .TP
-.B --random-mac
+.B --random-mac, -mac
 Randomize MAC address when scanning/attacking
 .TP
 .B --no-deauth
@@ -96,8 +119,8 @@ Never send deauth packets
 .B --num-deauths <num>
 Number of deauth packets to send (default: 1)
 .TP
-.B --scan-time <seconds>
-Time to wait before attacking all targets
+.B -p, --pillage
+Attack all targets after scan_time seconds (default: 10)
 .TP
 .B --target-bssid <mac>
 Target specific BSSID
@@ -125,28 +148,6 @@ Always capture new handshakes (ignore existing)
 .TP
 .B --strip
 Strip non-handshake packets from .cap files
-.TP
-.B --wep-pps <pps>
-Packets per second for WEP attacks (default: 600)
-.TP
-.B --wep-timeout <seconds>
-Seconds to wait before failing WEP attack (default: 600)
-.TP
-.B --wep-crack-at-ivs <num>
-Start cracking WEP keys at this many IVs (default: 10000)
-.TP
-.B --wep-restart-stale-ivs <seconds>
-Restart aireplay after seconds of no new IVs (default: 11)
-.TP
-.B --wep-restart-aircrack <seconds>
-Restart aircrack every N seconds (default: 30)
-.TP
-.B --require-fakeauth
-Require fake authentication for WEP attacks
-.TP
-.B --keep-ivs
-Retain .ivs files across multiple WEP attacks
-.TP
 .B --wpa-deauth-timeout <seconds>
 Seconds to wait between deauths (default: 15)
 .TP

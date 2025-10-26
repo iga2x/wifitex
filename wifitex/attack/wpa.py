@@ -93,27 +93,89 @@ class AttackWPA(Attack):
                 self.success = False
                 return False
 
-            # Choose cracking tool based on preference and availability
-            use_hashcat = False
-            try:
-                if getattr(Configuration, 'prefer_hashcat', False) and Hashcat.exists():
-                    use_hashcat = True
-                if getattr(Configuration, 'prefer_aircrack', True) and not Aircrack.exists():
-                    # Aircrack requested but missing; fall back to hashcat if available
-                    use_hashcat = Hashcat.exists()
-            except Exception:
-                use_hashcat = False
-
-            if use_hashcat:
-                Color.pl('\n{+} {C}Cracking WPA Handshake:{W} Running {C}hashcat{W} with' +
-                        ' {C}%s{W} wordlist' % os.path.split(Configuration.wordlist)[-1])
-                key = Hashcat.crack_handshake(handshake, show_command=True)
+            # Choose cracking tool and method based on configuration
+            key = None
+            
+            # Try brute force if enabled
+            if Configuration.use_brute_force and Hashcat.exists():
+                Color.pl('\n{+} {C}Cracking WPA Handshake with Brute Force:{W} Using {C}hashcat{W} with mask {C}%s{W}' % 
+                        Configuration.brute_force_mask)
+                
+                # Try different attack modes based on configuration
+                attack_modes_to_try = []
+                
+                # Parse brute_force_mode - can be single mode or comma-separated list
+                modes = str(Configuration.brute_force_mode).split(',')
+                has_dict_fallback = False
+                for mode in modes:
+                    mode = mode.strip()
+                    if mode in ['3', '6', '7']:
+                        attack_modes_to_try.append(mode)
+                    elif mode == '0':
+                        # Dictionary attack should come AFTER brute force attempts
+                        has_dict_fallback = True
+                
+                # If no valid modes, default to brute force
+                if not attack_modes_to_try:
+                    attack_modes_to_try = ['3']
+                
+                for attack_mode in attack_modes_to_try:
+                    if attack_mode == '3':
+                        # Pure brute force
+                        key = Hashcat.crack_handshake_brute_force(handshake, 
+                                mask=Configuration.brute_force_mask, 
+                                attack_mode='3', 
+                                show_command=True)
+                    elif attack_mode == '6':
+                        # Hybrid wordlist + mask
+                        if Configuration.wordlist and os.path.exists(Configuration.wordlist):
+                            Color.pl('{+} {C}Trying hybrid attack (wordlist + mask){W}')
+                            key = Hashcat.crack_handshake_brute_force(handshake,
+                                    mask=Configuration.brute_force_mask,
+                                    attack_mode='6',
+                                    show_command=True)
+                    elif attack_mode == '7':
+                        # Hybrid mask + wordlist
+                        if Configuration.wordlist and os.path.exists(Configuration.wordlist):
+                            Color.pl('{+} {C}Trying hybrid attack (mask + wordlist){W}')
+                            key = Hashcat.crack_handshake_brute_force(handshake,
+                                    mask=Configuration.brute_force_mask,
+                                    attack_mode='7',
+                                    show_command=True)
+                    
+                    if key:
+                        break  # Password found, exit loop
+                
+                # If brute force failed and has dict fallback, try dictionary
+                if not key and has_dict_fallback:
+                    Color.pl('{+} {C}Falling back to dictionary attack...{W}')
+                    key = Hashcat.crack_handshake(handshake, show_command=True)
             else:
-                Color.pl('\n{+} {C}Cracking WPA Handshake:{W} Running {C}aircrack-ng{W} with' +
-                        ' {C}%s{W} wordlist' % os.path.split(Configuration.wordlist)[-1])
-                key = Aircrack.crack_handshake(handshake, show_command=False)
+                # Standard dictionary attack
+                use_hashcat = False
+                try:
+                    if getattr(Configuration, 'prefer_hashcat', False) and Hashcat.exists():
+                        use_hashcat = True
+                    if getattr(Configuration, 'prefer_aircrack', True) and not Aircrack.exists():
+                        # Aircrack requested but missing; fall back to hashcat if available
+                        use_hashcat = Hashcat.exists()
+                except Exception:
+                    use_hashcat = False
+
+                if use_hashcat:
+                    Color.pl('\n{+} {C}Cracking WPA Handshake:{W} Running {C}hashcat{W} with' +
+                            ' {C}%s{W} wordlist' % os.path.split(Configuration.wordlist)[-1])
+                    key = Hashcat.crack_handshake(handshake, show_command=True)
+                else:
+                    Color.pl('\n{+} {C}Cracking WPA Handshake:{W} Running {C}aircrack-ng{W} with' +
+                            ' {C}%s{W} wordlist' % os.path.split(Configuration.wordlist)[-1])
+                    key = Aircrack.crack_handshake(handshake, show_command=False)
+            
             if key is None:
-                Color.pl('{!} {R}Failed to crack handshake: {O}%s{R} did not contain password{W}' % Configuration.wordlist.split(os.sep)[-1])
+                if Configuration.use_brute_force:
+                    Color.pl('{!} {R}Failed to crack handshake with brute force attack{W}')
+                else:
+                    Color.pl('{!} {R}Failed to crack handshake: {O}%s{R} did not contain password{W}' % Configuration.wordlist.split(os.sep)[-1])
                 self.success = False
             else:
                 Color.pl('{+} {G}Cracked WPA Handshake{W} PSK: {G}%s{W}\n' % key)

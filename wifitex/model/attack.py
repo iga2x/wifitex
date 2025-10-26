@@ -44,7 +44,7 @@ class Attack(object):
             if int(time.time() - start_time) > Attack.target_wait:
                 raise builtins.TimeoutError('Target did not appear after %d seconds, stopping' % Attack.target_wait)
             time.sleep(1)
-            targets = airodump.get_targets()
+            targets = airodump.get_targets(apply_filter=False)
             continue
 
         # Ensure this target was seen by airodump

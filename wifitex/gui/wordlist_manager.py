@@ -28,6 +28,24 @@ class WordlistManager:
         # Get all wordlist paths dynamically
         wordlist_paths = cast(List[str], get_dynamic_wordlist_paths() or [])
         
+        # Add wifitex/wordlists folder FIRST (local wordlists have priority)
+        try:
+            # Get the path to wifitex/wordlists folder
+            from .path_utils import get_project_root
+            project_root = get_project_root() or os.path.dirname(os.path.dirname(__file__))
+            wifitex_wordlists_dir = os.path.join(project_root, 'wordlists')
+            
+            if os.path.exists(wifitex_wordlists_dir) and os.path.isdir(wifitex_wordlists_dir):
+                # Scan all .txt, .lst, .gz files in wifitex/wordlists folder
+                for root, dirs, files in os.walk(wifitex_wordlists_dir):
+                    for file in files:
+                        if any(ext in file.lower() for ext in ['.txt', '.lst', '.gz']):
+                            wifitex_wordlist_path = os.path.join(root, file)
+                            wordlist_paths.insert(0, wifitex_wordlist_path)  # Add to front for priority
+                            logger.info(f"Detected wifitex wordlist: {file}")
+        except Exception as e:
+            logger.debug(f"Could not scan wifitex/wordlists folder: {e}")
+        
         # Add some specific common paths that might not be found by the dynamic search
         # Use dynamic system share directory detection
         from .path_utils import get_system_share_directory

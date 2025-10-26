@@ -57,7 +57,12 @@ class Target(object):
         self.channel    =     fields[3].strip()
 
         self.encryption =     fields[5].strip()
-        if 'WPA' in self.encryption:
+        # Preserve WPA2, WPA3, etc. instead of converting everything to WPA
+        if 'WPA2' in self.encryption:
+            self.encryption = 'WPA2'
+        elif 'WPA3' in self.encryption:
+            self.encryption = 'WPA3'
+        elif 'WPA' in self.encryption:
             self.encryption = 'WPA'
         if len(self.encryption) > 4:
             self.encryption = self.encryption[0:4].strip()

@@ -129,12 +129,30 @@ class Aircrack(Dependency):
 
     @staticmethod
     def get_wordlists():
-        """Get list of wordlists to try in order"""
+        """Get list of wordlists to try in order - auto-detect from all sources"""
         wordlists = []
         
         # Add primary wordlist first
         if Configuration.wordlist and os.path.exists(Configuration.wordlist):
             wordlists.append(Configuration.wordlist)
+        
+        # Auto-detect wordlists from wifitex/wordlists folder (HIGHEST PRIORITY)
+        try:
+            # Get wifitex package directory
+            import wifitex
+            wifitex_dir = os.path.dirname(os.path.abspath(wifitex.__file__))
+            wifitex_wordlists = os.path.join(wifitex_dir, 'wordlists')
+            
+            if os.path.exists(wifitex_wordlists):
+                # Scan all wordlist files
+                for root, dirs, files in os.walk(wifitex_wordlists):
+                    for file in files:
+                        if any(ext in file.lower() for ext in ['.txt', '.lst', '.gz']):
+                            wordlist_path = os.path.join(root, file)
+                            if wordlist_path not in wordlists:
+                                wordlists.append(wordlist_path)
+        except Exception:
+            pass
         
         # Add rockyou.txt if it exists
         rockyou_paths = [
@@ -144,7 +162,7 @@ class Aircrack(Dependency):
             'rockyou.txt'
         ]
         for path in rockyou_paths:
-            if os.path.exists(path):
+            if os.path.exists(path) and path not in wordlists:
                 wordlists.append(path)
                 break
         

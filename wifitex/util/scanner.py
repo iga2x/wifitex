@@ -124,23 +124,18 @@ class Scanner(object):
             # We need to 'overwrite' the previous list of targets.
             if Configuration.verbose <= 1:
                 # Don't clear screen buffer in verbose mode.
-                terminal_height = Scanner.get_terminal_height()
-                # Calculate how many lines we need to move up (header + targets)
-                lines_needed = 3 + self.previous_target_count
-                
-                # Only clear screen if:
-                # 1) Target count decreased significantly
-                # 2) Terminal is too small to fit the display
-                # 3) We're about to scroll past terminal height
-                if (self.previous_target_count > len(self.targets) or 
-                    terminal_height < lines_needed or
-                    lines_needed > terminal_height - 2):  # Leave 2 lines for status
-                    # Clear the screen for cleaner display
-                    Color.pl('\n' * (lines_needed + 2))  # Add some space
+                if self.previous_target_count > len(self.targets) or \
+                   Scanner.get_terminal_height() < self.previous_target_count + 3:
+                    # Either:
+                    # 1) We have less targets than before, so we can't overwrite the previous list
+                    # 2) The terminal can't display the targets without scrolling.
+                    # Clear the screen.
+                    from ..util.process import Process
+                    Process.call('clear')
                 else:
-                    # We can fit the targets - move cursor up to overwrite
-                    # Only move up if we have previous content
-                    Color.pl(Scanner.UP_CHAR * (3 + min(self.previous_target_count, len(self.targets))))
+                    # We can fit the targets in the terminal without scrolling
+                    # 'Move' cursor up so we will print over the previous list
+                    Color.pl(Scanner.UP_CHAR * (3 + self.previous_target_count))
 
         self.previous_target_count = len(self.targets)
 

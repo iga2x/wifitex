@@ -336,10 +336,12 @@ class WifitexMainWindow(QMainWindow):
         self.stop_attack_btn.clicked.connect(self.stop_attack)
         attack_buttons_layout.addWidget(self.stop_attack_btn)
         
+        # Hide pause button - feature removed per user request
         self.pause_attack_btn = QPushButton("Pause & Ask")
+        self.pause_attack_btn.setVisible(False)
         self.pause_attack_btn.setEnabled(False)
         self.pause_attack_btn.clicked.connect(self.pause_attack_for_decision)
-        attack_buttons_layout.addWidget(self.pause_attack_btn)
+        # attack_buttons_layout.addWidget(self.pause_attack_btn)  # Commented out - button hidden
         
         attack_layout.addLayout(attack_buttons_layout)
         
@@ -1186,7 +1188,7 @@ class WifitexMainWindow(QMainWindow):
         # Reset UI state
         self.attack_btn.setEnabled(True)
         self.stop_attack_btn.setEnabled(False)
-        self.pause_attack_btn.setEnabled(False)
+        # pause_attack_btn removed
         self.attack_status.setText("Attack: Stopped")
         
         # Clear attack info
@@ -1285,6 +1287,11 @@ class WifitexMainWindow(QMainWindow):
             'multi_wordlist': self.settings_panel.multi_wordlist_cb.isChecked(),
             'use_aircrack': self.settings_panel.aircrack_cb.isChecked(),
             'use_hashcat': self.settings_panel.hashcat_cb.isChecked(),
+            # Brute force options
+            'use_brute_force': self.settings_panel.brute_force_cb.isChecked(),
+            'brute_force_mode': self.settings_panel.brute_force_mode_combo.currentIndex(),
+            'brute_force_mask': self.settings_panel.brute_force_mask_edit.text(),
+            'brute_force_timeout': self.settings_panel.brute_force_timeout_spin.value() * 60,  # Convert minutes to seconds
             # KARMA Attack specific options
             'karma_probe_timeout': self.karma_probe_timeout_spin.value(),
             'karma_min_probes': self.karma_min_probes_spin.value(),
@@ -1320,7 +1327,7 @@ class WifitexMainWindow(QMainWindow):
             # All attacks finished - ensure proper cleanup
             self.attack_btn.setEnabled(True)
             self.stop_attack_btn.setEnabled(False)
-            self.pause_attack_btn.setEnabled(False)
+            # pause_attack_btn removed
             
             # Force cleanup of any remaining attack processes
             if hasattr(self.attack_manager, '_kill_attack_processes'):
@@ -1372,8 +1379,7 @@ class WifitexMainWindow(QMainWindow):
         self.attack_btn.setEnabled(False)
         self.stop_attack_btn.setEnabled(True)
         
-        # Only enable pause button for all attack types
-        self.pause_attack_btn.setEnabled(True)
+        # pause_attack_btn removed - keep it disabled
         self.attack_status.setText(f"Attack: {essid}")
         self.log_update.emit(f"Starting attack on {essid}")
         self.status_update.emit(f"Attacking {essid}...")

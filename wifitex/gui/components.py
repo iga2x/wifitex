@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QProgressBar, QTextEdit, QListWidget,
     QListWidgetItem, QGroupBox, QFrame, QScrollArea, QComboBox,
     QSpinBox, QCheckBox, QFileDialog, QDialog, QDialogButtonBox,
-    QMessageBox, QTabWidget, QTextBrowser
+    QMessageBox, QTabWidget, QTextBrowser, QLineEdit
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation,
@@ -260,13 +260,19 @@ class AttackManager(QWidget):
         """Stop current attack"""
         with self._attack_lock:
             if self.attack_thread and self.attack_thread.isRunning():
+                # Disable terminal capture to stop logs immediately
+                if hasattr(self.attack_thread, 'disable_terminal_capture'):
+                    self.attack_thread.disable_terminal_capture()
+                
                 # Set stop flag first
                 if hasattr(self.attack_thread, 'running'):
                     self.attack_thread.running = False
                 if hasattr(self.attack_thread, 'skip_current_attack'):
                     self.attack_thread.skip_current_attack = True
+                if hasattr(self.attack_thread, 'should_skip_current_attack'):
+                    self.attack_thread.should_skip_current_attack = True
                 
-                # Force cleanup of attack processes
+                # Force cleanup of attack processes (most aggressive)
                 if hasattr(self.attack_thread, 'force_cleanup'):
                     self.attack_thread.force_cleanup()
                 
@@ -274,15 +280,21 @@ class AttackManager(QWidget):
                 self._kill_attack_processes()
                 
                 # Stop the thread
-                self.attack_thread.stop()
+                if hasattr(self.attack_thread, 'stop'):
+                    self.attack_thread.stop()
+                
                 self.attack_thread.wait(3000)  # Wait up to 3 seconds
                 if self.attack_thread.isRunning():
                     self.attack_thread.terminate()
                     self.attack_thread.wait(1000)  # Wait another second
                 
-                # Cleanup the attack worker
+                # Final cleanup of the attack worker
                 if hasattr(self.attack_thread, 'cleanup'):
                     self.attack_thread.cleanup()
+                
+                # Ensure terminal capture is disabled
+                if hasattr(self.attack_thread, 'disable_terminal_capture'):
+                    self.attack_thread.disable_terminal_capture()
                     
             # Always reset attack state when stopping
             self.attacking = False
@@ -604,6 +616,10 @@ class SettingsPanel(QWidget):
 
         advanced_layout.addWidget(wps_group)
         
+        # Update GPU info when UI is shown
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(500, self._update_gpu_info)
+        
         layout.addWidget(advanced_group)
         
         # Cracking settings
@@ -620,6 +636,98 @@ class SettingsPanel(QWidget):
             "Custom Strategy"
         ])
         cracking_layout.addWidget(self.cracking_strategy_combo)
+        
+        # Brute Force Attack section
+        brute_group = QGroupBox("Brute Force Attack (GPU-Accelerated)")
+        brute_layout = QVBoxLayout(brute_group)
+        
+        # Enable brute force
+        self.brute_force_cb = QCheckBox("Enable Brute Force Attack")
+        self.brute_force_cb.setChecked(False)
+        self.brute_force_cb.setToolTip("Try all possible password combinations using mask patterns (requires GPU for good performance)")
+        brute_layout.addWidget(self.brute_force_cb)
+        
+        # Brute force mode
+        brute_mode_layout = QHBoxLayout()
+        brute_mode_layout.addWidget(QLabel("Attack Mode:"))
+        self.brute_mode_combo = QComboBox()
+        self.brute_mode_combo.addItems([
+            "Dictionary Attack (Mode 0)",
+            "Pure Brute Force (Mode 3)",
+            "Hybrid: Wordlist + Mask (Mode 6)",
+            "Hybrid: Mask + Wordlist (Mode 7)"
+        ])
+        brute_mode_layout.addWidget(self.brute_mode_combo)
+        brute_layout.addLayout(brute_mode_layout)
+        
+        # Pre-defined mask patterns
+        self.mask_patterns = {
+            "8 Digits Only (Fast)": "?d?d?d?d?d?d?d?d",
+            "6 Digits Only (Very Fast)": "?d?d?d?d?d?d",
+            "10 Digits (Phone/ID)": "?d?d?d?d?d?d?d?d?d?d",
+            "8 Lowercase (Common)": "?l?l?l?l?l?l?l?l",
+            "8 Uppercase": "?u?u?u?u?u?u?u?u",
+            "8 Mixed Case": "?u?l?l?l?l?l?l?l",
+            "8 Mixed Case+Digits": "?u?l?l?l?l?l?l?d",
+            "8 Lowercase+Digits": "?l?l?l?l?l?l?d?d",
+            "Mixed Case+Digits+Special": "?u?l?l?l?l?l?d?s",
+            "All ASCII (Slow)": "?a?a?a?a?a?a?a?a",
+            "Custom Pattern": ""
+        }
+        
+        mask_layout = QHBoxLayout()
+        mask_layout.addWidget(QLabel("Mask Pattern:"))
+        self.mask_combo = QComboBox()
+        self.mask_combo.addItems(list(self.mask_patterns.keys()))
+        self.mask_combo.currentTextChanged.connect(self._on_mask_combo_changed)
+        mask_layout.addWidget(self.mask_combo)
+        brute_layout.addLayout(mask_layout)
+        
+        # Custom mask input (hidden by default)
+        custom_mask_layout = QHBoxLayout()
+        custom_mask_layout.addWidget(QLabel("Custom Mask:"))
+        self.custom_mask_edit = QLineEdit()
+        self.custom_mask_edit.setPlaceholderText("e.g. ?d?d?d?d?l?l?l?l")
+        self.custom_mask_edit.setVisible(False)
+        custom_mask_layout.addWidget(self.custom_mask_edit)
+        brute_layout.addLayout(custom_mask_layout)
+        
+        # Password length constraints
+        length_layout = QHBoxLayout()
+        length_layout.addWidget(QLabel("Min Length:"))
+        self.brute_min_length_spin = QSpinBox()
+        self.brute_min_length_spin.setRange(8, 64)
+        self.brute_min_length_spin.setValue(8)
+        self.brute_min_length_spin.setToolTip("Minimum password length (WPA minimum is 8)")
+        length_layout.addWidget(self.brute_min_length_spin)
+        
+        length_layout.addWidget(QLabel("Max Length:"))
+        self.brute_max_length_spin = QSpinBox()
+        self.brute_max_length_spin.setRange(8, 64)
+        self.brute_max_length_spin.setValue(20)
+        self.brute_max_length_spin.setToolTip("Maximum password length (WPA maximum is 64)")
+        length_layout.addWidget(self.brute_max_length_spin)
+        brute_layout.addLayout(length_layout)
+        
+        # Timeout
+        timeout_layout = QHBoxLayout()
+        timeout_layout.addWidget(QLabel("Timeout (minutes):"))
+        self.brute_timeout_spin = QSpinBox()
+        self.brute_timeout_spin.setRange(1, 1440)  # 1 minute to 24 hours
+        self.brute_timeout_spin.setValue(60)  # 1 hour default
+        self.brute_timeout_spin.setToolTip("Maximum time to spend on brute force before giving up")
+        timeout_layout.addWidget(self.brute_timeout_spin)
+        brute_layout.addLayout(timeout_layout)
+        
+        # GPU info
+        self.gpu_info_label = QLabel("GPU: Checking...")
+        self.gpu_info_label.setStyleSheet("color: #888")
+        brute_layout.addWidget(self.gpu_info_label)
+        
+        cracking_layout.addWidget(brute_group)
+        
+        # Update GPU info after UI is setup
+        self._update_gpu_info()
         
         # Wordlist selection
         cracking_layout.addWidget(QLabel("Primary Wordlist:"))
@@ -642,6 +750,48 @@ class SettingsPanel(QWidget):
         self.hashcat_cb = QCheckBox("Hashcat")
         self.hashcat_cb.setChecked(True)
         cracking_layout.addWidget(self.hashcat_cb)
+        
+        # Brute force attack options
+        cracking_layout.addWidget(QLabel("Brute Force Attack:"))
+        self.brute_force_cb = QCheckBox("Enable Brute Force Attack")
+        self.brute_force_cb.setChecked(False)
+        self.brute_force_cb.setToolTip("Try all possible password combinations using mask patterns (VERY SLOW)")
+        cracking_layout.addWidget(self.brute_force_cb)
+        
+        # Brute force mode
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Attack Mode:"))
+        self.brute_force_mode_combo = QComboBox()
+        self.brute_force_mode_combo.addItems([
+            "Dictionary (0)",
+            "Pure Brute Force (3)",
+            "Hybrid Wordlist+Mask (6)",
+            "Hybrid Mask+Wordlist (7)"
+        ])
+        self.brute_force_mode_combo.setCurrentIndex(1)  # Default to pure brute force
+        self.brute_force_mode_combo.setToolTip("0=Dictionary, 3=Brute Force, 6=Hybrid(wl+m), 7=Hybrid(m+wl)")
+        mode_layout.addWidget(self.brute_force_mode_combo)
+        cracking_layout.addLayout(mode_layout)
+        
+        # Brute force mask
+        mask_layout = QHBoxLayout()
+        mask_layout.addWidget(QLabel("Mask Pattern:"))
+        self.brute_force_mask_edit = QLineEdit()
+        self.brute_force_mask_edit.setText("?a?a?a?a?a?a?a?a")
+        self.brute_force_mask_edit.setPlaceholderText("?a?a?a?a?a?a?a?a")
+        self.brute_force_mask_edit.setToolTip("?l=lowercase ?u=uppercase ?d=digits ?s=special ?a=all ASCII")
+        mask_layout.addWidget(self.brute_force_mask_edit)
+        cracking_layout.addLayout(mask_layout)
+        
+        # Timeout
+        timeout_layout = QHBoxLayout()
+        timeout_layout.addWidget(QLabel("Max Time (min):"))
+        self.brute_force_timeout_spin = QSpinBox()
+        self.brute_force_timeout_spin.setRange(1, 1440)  # 1 min to 24 hours
+        self.brute_force_timeout_spin.setValue(60)  # Default 1 hour
+        self.brute_force_timeout_spin.setToolTip("Maximum time in minutes for brute force attempts")
+        timeout_layout.addWidget(self.brute_force_timeout_spin)
+        cracking_layout.addLayout(timeout_layout)
         
         layout.addWidget(cracking_group)
         
@@ -852,6 +1002,32 @@ class SettingsPanel(QWidget):
             if 'multi_wordlist' in settings:
                 self.multi_wordlist_cb.setChecked(settings['multi_wordlist'])
             
+            # Load brute force settings
+            if 'use_brute_force' in settings:
+                self.brute_force_cb.setChecked(settings['use_brute_force'])
+            if 'brute_force_mode' in settings:
+                index = settings['brute_force_mode']
+                if 0 <= index < self.brute_mode_combo.count():
+                    self.brute_mode_combo.setCurrentIndex(index)
+            if 'brute_force_mask' in settings:
+                mask = settings['brute_force_mask']
+                # Check if it's a custom mask or predefined
+                found = False
+                for key, value in self.mask_patterns.items():
+                    if value == mask and key != "Custom Pattern":
+                        self.mask_combo.setCurrentText(key)
+                        found = True
+                        break
+                if not found:
+                    self.mask_combo.setCurrentText("Custom Pattern")
+                    self.custom_mask_edit.setText(mask)
+            if 'brute_min_length' in settings:
+                self.brute_min_length_spin.setValue(settings['brute_min_length'])
+            if 'brute_max_length' in settings:
+                self.brute_max_length_spin.setValue(settings['brute_max_length'])
+            if 'brute_force_timeout' in settings:
+                self.brute_timeout_spin.setValue(settings['brute_force_timeout'])
+            
             # Load KARMA settings
             if 'karma_dns_spoofing' in settings:
                 self.karma_dns_spoofing_cb.setChecked(settings['karma_dns_spoofing'])
@@ -916,6 +1092,14 @@ class SettingsPanel(QWidget):
                 'use_hashcat': self.hashcat_cb.isChecked(),
                 'multi_wordlist': self.multi_wordlist_cb.isChecked(),
                 
+                # Brute force settings
+                'use_brute_force': self.brute_force_cb.isChecked(),
+                'brute_force_mode': self.brute_mode_combo.currentIndex(),
+                'brute_force_mask': self.mask_combo.currentText() == "Custom Pattern" and self.custom_mask_edit.text() or self.mask_patterns.get(self.mask_combo.currentText(), "?d?d?d?d?d?d"),
+                'brute_min_length': self.brute_min_length_spin.value(),
+                'brute_max_length': self.brute_max_length_spin.value(),
+                'brute_force_timeout': self.brute_timeout_spin.value(),
+                
                 # KARMA settings
                 'karma_dns_spoofing': self.karma_dns_spoofing_cb.isChecked(),
                 'karma_handshake_cracking': self.karma_handshake_cracking_cb.isChecked(),
@@ -968,6 +1152,14 @@ class SettingsPanel(QWidget):
                 'use_hashcat': self.hashcat_cb.isChecked(),
                 'multi_wordlist': self.multi_wordlist_cb.isChecked(),
                 
+                # Brute force settings
+                'use_brute_force': self.brute_force_cb.isChecked(),
+                'brute_force_mode': self.brute_mode_combo.currentIndex(),
+                'brute_force_mask': self.mask_combo.currentText() == "Custom Pattern" and self.custom_mask_edit.text() or self.mask_patterns.get(self.mask_combo.currentText(), "?d?d?d?d?d?d"),
+                'brute_min_length': self.brute_min_length_spin.value(),
+                'brute_max_length': self.brute_max_length_spin.value(),
+                'brute_force_timeout': self.brute_timeout_spin.value(),
+                
                 # KARMA settings
                 'karma_dns_spoofing': self.karma_dns_spoofing_cb.isChecked(),
                 'karma_handshake_cracking': self.karma_handshake_cracking_cb.isChecked(),
@@ -1015,6 +1207,15 @@ class SettingsPanel(QWidget):
         self.aircrack_cb.toggled.connect(self.save_settings)
         self.hashcat_cb.toggled.connect(self.save_settings)
         self.multi_wordlist_cb.toggled.connect(self.save_settings)
+        
+        # Brute force settings
+        self.brute_force_cb.toggled.connect(self.save_settings)
+        self.brute_mode_combo.currentIndexChanged.connect(self.save_settings)
+        self.mask_combo.currentTextChanged.connect(self.save_settings)
+        self.custom_mask_edit.textChanged.connect(self.save_settings)
+        self.brute_min_length_spin.valueChanged.connect(self.save_settings)
+        self.brute_max_length_spin.valueChanged.connect(self.save_settings)
+        self.brute_timeout_spin.valueChanged.connect(self.save_settings)
         
         # KARMA settings
         self.karma_dns_spoofing_cb.toggled.connect(self.save_settings)
@@ -1064,6 +1265,40 @@ class SettingsPanel(QWidget):
         
         # Save the reset settings
         self.save_settings()
+    
+    def _on_mask_combo_changed(self, text):
+        """Handle mask pattern selection"""
+        if text == "Custom Pattern":
+            self.custom_mask_edit.setVisible(True)
+            self.mask_combo.blockSignals(True)
+            self.mask_combo.setCurrentIndex(self.mask_combo.findText("Custom Pattern"))
+            self.mask_combo.blockSignals(False)
+        else:
+            self.custom_mask_edit.setVisible(False)
+            if text in self.mask_patterns and text != "Custom Pattern":
+                mask = self.mask_patterns[text]
+                if self.custom_mask_edit:
+                    self.custom_mask_edit.setText(mask)
+    
+    def _update_gpu_info(self):
+        """Update GPU information display"""
+        try:
+            from ..tools.hashcat import Hashcat
+            if Hashcat.has_gpu():
+                gpu_info = Hashcat.get_gpu_info()
+                if gpu_info:
+                    gpu_name = gpu_info.get('cuda_gpu', 'OpenCL GPU')
+                    self.gpu_info_label.setText(f"GPU: {gpu_name} ✓")
+                    self.gpu_info_label.setStyleSheet("color: #4CAF50")
+                else:
+                    self.gpu_info_label.setText("GPU: Available")
+                    self.gpu_info_label.setStyleSheet("color: #4CAF50")
+            else:
+                self.gpu_info_label.setText("GPU: Not Available (CPU only - very slow)")
+                self.gpu_info_label.setStyleSheet("color: #f44336")
+        except Exception as e:
+            self.gpu_info_label.setText(f"GPU: {str(e)}")
+            self.gpu_info_label.setStyleSheet("color: #888")
     
     def _populate_wordlist_combo(self):
         """Populate the wordlist combo box with available wordlists"""
@@ -3359,6 +3594,27 @@ class AttackWorker(QThread):
             self.Configuration.prefer_aircrack = bool(self.options.get('use_aircrack', True))
             self.Configuration.prefer_hashcat = bool(self.options.get('use_hashcat', False))
             
+            # Brute force settings (from options)
+            self.Configuration.use_brute_force = bool(self.options.get('use_brute_force', False))
+            if self.Configuration.use_brute_force:
+                # Map GUI mode index to hashcat mode string
+                mode_index = self.options.get('brute_force_mode', 1)  # Default to mode 3
+                mode_map = {
+                    0: '0',  # Dictionary
+                    1: '3',  # Pure brute force
+                    2: '6',  # Hybrid wordlist + mask
+                    3: '7'   # Hybrid mask + wordlist
+                }
+                self.Configuration.brute_force_mode = mode_map.get(mode_index, '3')
+                self.Configuration.brute_force_mask = self.options.get('brute_force_mask', '?a?a?a?a?a?a?a?a')
+                self.Configuration.brute_force_timeout = int(self.options.get('brute_force_timeout', 3600))  # Default 1 hour
+                
+                # Log brute force configuration
+                if self.Configuration.brute_force_mode == '3':
+                    self.log_message.emit(f"Brute force enabled: Pure brute force with mask {self.Configuration.brute_force_mask}")
+                elif self.Configuration.brute_force_mode in ['6', '7']:
+                    self.log_message.emit(f"Brute force enabled: Hybrid mode {self.Configuration.brute_force_mode} with mask {self.Configuration.brute_force_mask}")
+            
             # Set wordlist if auto-crack is enabled
             if self.options.get('crack', False):
                 # Use enhanced wordlist selection
@@ -3869,17 +4125,31 @@ class AttackWorker(QThread):
                 except Exception:
                     pass
             
-            # Kill any remaining attack processes by name
+            # Kill any remaining attack processes by name (more aggressive)
             import subprocess
             import signal
+            import time
             try:
-                # Kill common attack tools (excluding airodump-ng to avoid RF-kill issues)
-                attack_tools = ['reaver', 'bully', 'aircrack-ng', 'aireplay-ng', 'hcxdumptool']
+                # Kill common attack tools more aggressively
+                attack_tools = ['reaver', 'bully', 'aircrack-ng', 'aireplay-ng', 'hcxdumptool', 'airodump-ng', 'tshark', 'hostapd', 'dnsmasq']
                 for tool in attack_tools:
                     try:
-                        subprocess.run(['pkill', '-f', tool], capture_output=True)
+                        # Try graceful kill first
+                        subprocess.run(['pkill', '-SIGTERM', '-f', tool], capture_output=True, timeout=1)
+                        time.sleep(0.1)
+                        # Then force kill if still running
+                        subprocess.run(['pkill', '-SIGKILL', '-f', tool], capture_output=True, timeout=1)
                     except Exception:
                         pass
+                        
+                # Also kill any Python processes running attack code
+                try:
+                    # Only kill our own attack processes, not all Python processes
+                    import os
+                    pid = os.getpid()
+                    subprocess.run(['pkill', '-9', '-f', 'wifitex.*attack'], capture_output=True, timeout=1)
+                except Exception:
+                    pass
             except Exception:
                 pass
                 
@@ -3890,6 +4160,10 @@ class AttackWorker(QThread):
         """Stop the attack worker aggressively"""
         self.running = False
         self.should_skip_current_attack = True
+        self.skip_current_attack = True
+        
+        # Disable terminal capture immediately to stop logs
+        self.disable_terminal_capture()
         
         # Force cleanup of all processes
         self.force_cleanup()
@@ -3899,12 +4173,25 @@ class AttackWorker(QThread):
             import subprocess
             import os
             import signal
+            import time
             
-            # Kill any remaining attack processes
-            attack_tools = ['reaver', 'bully', 'aircrack-ng', 'aireplay-ng', 'airodump-ng', 'hcxdumptool', 'hcxpcapngtool']
+            # Kill any remaining attack processes (more comprehensive list)
+            attack_tools = ['reaver', 'bully', 'aircrack-ng', 'aireplay-ng', 'airodump-ng', 'hcxdumptool', 
+                          'hcxpcapngtool', 'tshark', 'hostapd', 'dnsmasq', 'iw', 'ip', 'ifconfig']
+            
+            # First send SIGTERM
             for tool in attack_tools:
                 try:
-                    subprocess.run(['pkill', '-KILL', '-f', tool], capture_output=True, timeout=1)
+                    subprocess.run(['pkill', '-SIGTERM', '-f', tool], capture_output=True, timeout=0.5)
+                except Exception:
+                    pass
+            
+            time.sleep(0.2)  # Give processes time to terminate gracefully
+            
+            # Then send SIGKILL for anything still running
+            for tool in attack_tools:
+                try:
+                    subprocess.run(['pkill', '-9', '-f', tool], capture_output=True, timeout=0.5)
                 except Exception:
                     pass
                     
@@ -4038,6 +4325,13 @@ class AttackWorker(QThread):
                         self.log_message.emit(f"[{attack_name}] Skipped by user, continuing to next attack type...")
                         continue
                     
+                    # Cleanup any previous attack processes before starting new attack
+                    self.force_cleanup()
+                    
+                    # Small delay to ensure processes are killed
+                    import time
+                    time.sleep(0.5)
+                    
                     result = attack_func()
                     
                     # Check skip after attack execution
@@ -4049,6 +4343,8 @@ class AttackWorker(QThread):
                         return True  # Attack succeeded
                     else:
                         # Attack failed, continue to next attack type
+                        # Cleanup before moving to next attack to prevent "waiting for target" issues
+                        self.force_cleanup()
                         self.log_message.emit(f"[{attack_name}] Failed, continuing to next attack type...")
                         continue
                 except Exception as e:
@@ -4057,6 +4353,8 @@ class AttackWorker(QThread):
                         self.log_message.emit(f"[{attack_name}] Skipped by user, continuing to next attack type...")
                         continue
                     else:
+                        # Cleanup after exception
+                        self.force_cleanup()
                         self.log_message.emit(f"[{attack_name}] Error: {str(e)}, continuing to next attack type...")
                         continue
             

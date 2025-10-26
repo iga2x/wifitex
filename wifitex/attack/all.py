@@ -95,7 +95,10 @@ class AttackAll(object):
 
             if not Configuration.wps_only:
                 # PMKID - Works on WPA2 and WPA3
-                attacks.append(AttackPMKID(target))
+                if AttackPMKID.can_attack_pmkid():
+                    attacks.append(AttackPMKID(target))
+                else:
+                    Color.pl('{!} {O}PMKID attack not available - missing required tools{W}')
 
                 # Handshake capture - Works on WPA, WPA2, and WPA3
                 if not Configuration.use_pmkid_only:

@@ -307,6 +307,33 @@ class Arguments(object):
         wpa.add_argument('-wpat', help=argparse.SUPPRESS, action='store',
                 dest='wpa_attack_timeout', type=int)
 
+        # Brute force attack options
+        wpa.add_argument('--brute-force',
+            action='store_true',
+            dest='use_brute_force',
+            help=Color.s('Enable brute force attack mode ({O}VERY SLOW{W})'))
+        
+        wpa.add_argument('--brute-mode',
+            action='store',
+            dest='brute_force_mode',
+            metavar='[mode]',
+            type=str,
+            help=self._verbose('Brute force mode: {C}3{W}=pure brute, {C}6{W}=hybrid wordlist+mask, {C}7{W}=hybrid mask+wordlist (default: {G}3{W})'))
+        
+        wpa.add_argument('--brute-mask',
+            action='store',
+            dest='brute_force_mask',
+            metavar='[mask]',
+            type=str,
+            help=self._verbose('Brute force mask pattern: {C}?l{W}=lower, {C}?u{W}=upper, {C}?d{W}=digits, {C}?a{W}=all (default: {G}?a?a?a?a?a?a?a?a{W})'))
+        
+        wpa.add_argument('--brute-timeout',
+            action='store',
+            dest='brute_force_timeout',
+            metavar='[seconds]',
+            type=int,
+            help=self._verbose('Max time for brute force in seconds (default: {G}3600{W})'))
+
         # TODO: Uncomment the --strip option once it works
         '''
         wpa.add_argument('--strip',

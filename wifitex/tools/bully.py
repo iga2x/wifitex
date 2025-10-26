@@ -75,14 +75,24 @@ class Bully(Attack, Dependency):
             self.pattack('{R}Failed{W}', newline=True)
 
     def _run(self, airodump):
+        consecutive_not_found = 0
+        last_target_refresh = time.time()
+        
         while self.bully_proc and self.bully_proc.poll() is None:
-            try:
-                self.target = self.wait_for_target(airodump)
-            except Exception as e:
-                self.pattack('{R}Failed: {O}%s{W}' % e, newline=True)
-                Color.pexception(e)
-                self.stop()
-                break
+            current_time = time.time()
+            # Refresh target every 3 seconds, but be tolerant of temporary disappearance
+            if current_time - last_target_refresh >= 3:
+                try:
+                    self.target = self.wait_for_target(airodump)
+                    consecutive_not_found = 0  # Reset counter
+                except Exception as e:
+                    consecutive_not_found += 1
+                    # Only fail after many consecutive failures (30 attempts = 90 seconds)
+                    if consecutive_not_found > 30:
+                        self.pattack('{R}Failed: {O}Could not find target after 30 attempts{W}', newline=True)
+                        self.stop()
+                        break
+                last_target_refresh = current_time
 
             # Update status
             self.pattack(self.get_status())

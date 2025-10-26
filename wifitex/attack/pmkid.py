@@ -16,6 +16,14 @@ import re
 
 class AttackPMKID(Attack):
 
+    @staticmethod
+    def can_attack_pmkid():
+        '''Check if PMKID attack tools are available'''
+        from ..util.process import Process
+        return (Process.exists('hcxdumptool') and 
+                Process.exists('hcxpcapngtool') and 
+                Process.exists('hashcat'))
+
     def __init__(self, target):
         super(AttackPMKID, self).__init__(target)
         self.crack_result = None
@@ -23,6 +31,9 @@ class AttackPMKID(Attack):
         self.pcapng_file = Configuration.temp('pmkid.pcapng')
         self.running = True
         self.skip_current_attack = False
+        
+        # Validate target has required attributes
+        self.validate_target()
 
 
     def get_existing_pmkid_file(self, bssid):
@@ -183,23 +194,79 @@ class AttackPMKID(Attack):
             True if cracked, False otherwise.
         '''
 
-        # Check that wordlist exists before cracking.
-        if Configuration.wordlist is None:
-            Color.pl('\n{!} {O}Not cracking PMKID ' +
-                    'because there is no {R}wordlist{O} (re-run with {C}--dict{O})')
-
-            # TODO: Uncomment once --crack is updated to support recracking PMKIDs.
-            #Color.pl('{!} {O}Run Wifitex with the {R}--crack{O} and {R}--dict{O} options to try again.')
-
-            key = None
-        else:
+        key = None
+        
+        # Try brute force if enabled
+        if Configuration.use_brute_force:
             Color.clear_entire_line()
-            Color.pattack('PMKID', self.target, 'CRACK', 'Cracking PMKID using {C}%s{W} ...\n' % Configuration.wordlist)
-            key = Hashcat.crack_pmkid(pmkid_file)
+            Color.pattack('PMKID', self.target, 'CRACK', 
+                    'Cracking PMKID with brute force using mask {C}%s{W}\n' % Configuration.brute_force_mask)
+            
+            # Try different attack modes
+            attack_modes_to_try = []
+            has_dict_fallback = False
+            modes = str(Configuration.brute_force_mode).split(',')
+            for mode in modes:
+                mode = mode.strip()
+                if mode in ['3', '6', '7']:
+                    attack_modes_to_try.append(mode)
+                elif mode == '0':
+                    # Dictionary attack should come AFTER brute force attempts
+                    has_dict_fallback = True
+            
+            if not attack_modes_to_try:
+                attack_modes_to_try = ['3']
+            
+            for attack_mode in attack_modes_to_try:
+                if attack_mode == '3':
+                    key = Hashcat.crack_pmkid_brute_force(pmkid_file, 
+                            mask=Configuration.brute_force_mask,
+                            attack_mode='3',
+                            verbose=True)
+                elif attack_mode == '6':
+                    if Configuration.wordlist and os.path.exists(Configuration.wordlist):
+                        key = Hashcat.crack_pmkid_brute_force(pmkid_file,
+                                mask=Configuration.brute_force_mask,
+                                attack_mode='6',
+                                verbose=True)
+                elif attack_mode == '7':
+                    if Configuration.wordlist and os.path.exists(Configuration.wordlist):
+                        key = Hashcat.crack_pmkid_brute_force(pmkid_file,
+                                mask=Configuration.brute_force_mask,
+                                attack_mode='7',
+                                verbose=True)
+                
+                if key:
+                    break
+            
+            # Fall back to dictionary if brute force failed and has dict fallback
+            if not key and has_dict_fallback:
+                Color.pl('{+} {C}Falling back to dictionary attack...{W}')
+                key = Hashcat.crack_pmkid(pmkid_file, verbose=True)
+        
+        # Standard dictionary attack
+        else:
+            # Check that wordlist exists before cracking.
+            if Configuration.wordlist is None:
+                Color.pl('\n{!} {O}Not cracking PMKID ' +
+                        'because there is no {R}wordlist{O} (re-run with {C}--dict{O})')
+
+                # TODO: Uncomment once --crack is updated to support recracking PMKIDs.
+                #Color.pl('{!} {O}Run Wifitex with the {R}--crack{O} and {R}--dict{O} options to try again.')
+
+                key = None
+            else:
+                Color.clear_entire_line()
+                Color.pattack('PMKID', self.target, 'CRACK', 'Cracking PMKID using {C}%s{W} ...\n' % Configuration.wordlist)
+                key = Hashcat.crack_pmkid(pmkid_file, verbose=True)
 
         if key is None:
             # Failed to crack.
-            if Configuration.wordlist is not None:
+            if Configuration.use_brute_force:
+                Color.clear_entire_line()
+                Color.pattack('PMKID', self.target, '{R}CRACK',
+                        '{R}Failed {O}Password not found with brute force.\n')
+            elif Configuration.wordlist is not None:
                 Color.clear_entire_line()
                 Color.pattack('PMKID', self.target, '{R}CRACK',
                         '{R}Failed {O}Passphrase not found in dictionary.\n')

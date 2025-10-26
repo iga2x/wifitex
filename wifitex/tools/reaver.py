@@ -140,9 +140,10 @@ class Reaver(Attack, Dependency):
                         if Configuration.verbose > 1:
                             Color.pl('\n{!} {O}Target temporarily not visible in airodump (attempt %d){W}' % consecutive_not_found)
                         
-                        # Only fail if target is missing for too long
-                        if consecutive_not_found > 10:
-                            raise AttackError('Could not find target in airodump after 10 attempts')
+                        # Only fail if target is missing for too long (30 attempts = 90 seconds)
+                        # This gives more time for the target to reappear
+                        if consecutive_not_found > 30:
+                            raise AttackError('Could not find target in airodump after 30 attempts')
                     
                     last_target_refresh = current_time
                 

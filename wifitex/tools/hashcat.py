@@ -83,12 +83,30 @@ class Hashcat(Dependency):
 
     @staticmethod
     def get_wordlists():
-        """Get list of wordlists to try in order"""
+        """Get list of wordlists to try in order - auto-detect from all sources"""
         wordlists = []
         
         # Add primary wordlist first
         if Configuration.wordlist and os.path.exists(Configuration.wordlist):
             wordlists.append(Configuration.wordlist)
+        
+        # Auto-detect wordlists from wifitex/wordlists folder (HIGHEST PRIORITY)
+        try:
+            # Get wifitex package directory
+            import wifitex
+            wifitex_dir = os.path.dirname(os.path.abspath(wifitex.__file__))
+            wifitex_wordlists = os.path.join(wifitex_dir, 'wordlists')
+            
+            if os.path.exists(wifitex_wordlists):
+                # Scan all wordlist files
+                for root, dirs, files in os.walk(wifitex_wordlists):
+                    for file in files:
+                        if any(ext in file.lower() for ext in ['.txt', '.lst', '.gz']):
+                            wordlist_path = os.path.join(root, file)
+                            if wordlist_path not in wordlists:
+                                wordlists.append(wordlist_path)
+        except Exception:
+            pass
         
         # Add rockyou.txt if it exists
         rockyou_paths = [
@@ -98,7 +116,7 @@ class Hashcat(Dependency):
             'rockyou.txt'
         ]
         for path in rockyou_paths:
-            if os.path.exists(path):
+            if os.path.exists(path) and path not in wordlists:
                 wordlists.append(path)
                 break
         
@@ -209,6 +227,148 @@ class Hashcat(Dependency):
                 # stdout is guaranteed to be a string from Process.get_output()
                 key = str(stdout).strip().split(':', 1)[1]
                 return key
+
+    @staticmethod
+    def crack_handshake_brute_force(handshake, mask=None, attack_mode='3', show_command=False):
+        '''
+        Brute force attack using hashcat mask (-a 3).
+        Modes:
+            -a 3: Pure brute force with mask
+            -a 6: Hybrid wordlist + mask
+            -a 7: Hybrid mask + wordlist
+        
+        Mask patterns:
+            ?l = lowercase letters (a-z)
+            ?u = uppercase letters (A-Z)
+            ?d = digits (0-9)
+            ?s = special chars (!"#$%%&'()*+,-./:;<=>?@[\\]^_`{|}~)
+            ?a = all printable ASCII (?l?u?d?s)
+            ?b = all bytes (0x00-0xff)
+        
+        Returns: Key (str) if found; `None` if not found.
+        '''
+        if not Hashcat.exists():
+            return None
+            
+        if mask is None:
+            mask = Configuration.brute_force_mask
+            
+        # Generate hccapx (modern format)
+        hccapx_file = HcxPcapTool.generate_hccapx_file(
+                handshake, show_command=show_command)
+
+        # Build command
+        command = [
+            'hashcat',
+            '--quiet',
+            '-m', '22000',  # Modern WPA-PBKDF2-PMKID+EAPOL format
+            '-a', attack_mode,  # Brute force attack mode
+            hccapx_file
+        ]
+        
+        # Add mask or wordlist based on attack mode
+        if attack_mode == '3':
+            # Pure brute force: add mask directly
+            command.append(mask)
+        elif attack_mode == '6':
+            # Hybrid wordlist + mask
+            if not Configuration.wordlist or not os.path.exists(Configuration.wordlist):
+                if show_command:
+                    Color.pl('{!} {R}Error: Wordlist required for hybrid attack mode 6{W}')
+                return None
+            command.append(Configuration.wordlist)
+            command.append(mask)
+        elif attack_mode == '7':
+            # Hybrid mask + wordlist
+            if not Configuration.wordlist or not os.path.exists(Configuration.wordlist):
+                if show_command:
+                    Color.pl('{!} {R}Error: Wordlist required for hybrid attack mode 7{W}')
+                return None
+            command.append(mask)
+            command.append(Configuration.wordlist)
+        
+        if Hashcat.should_use_force():
+            command.append('--force')
+            
+        if show_command:
+            Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
+            
+        process = Process(command)
+        stdout, stderr = process.get_output()
+        
+        key = None
+        if ':' in str(stdout):
+            key = str(stdout).split(':', 5)[-1].strip()
+            
+        if os.path.exists(hccapx_file):
+            os.remove(hccapx_file)
+            
+        return key
+
+    @staticmethod
+    def crack_pmkid_brute_force(pmkid_file, mask=None, attack_mode='3', verbose=False):
+        '''
+        Brute force attack on PMKID using hashcat mask (-a 3, 6, or 7).
+        Returns: Key (str) if found; `None` if not found.
+        '''
+        if mask is None:
+            mask = Configuration.brute_force_mask
+            
+        # Build command
+        command = [
+            'hashcat',
+            '--quiet',
+            '-m', '16800',  # WPA-PMKID-PBKDF2
+            '-a', attack_mode,
+            pmkid_file
+        ]
+        
+        # Add mask or wordlist based on attack mode
+        if attack_mode == '3':
+            command.append(mask)
+        elif attack_mode == '6':
+            if not Configuration.wordlist or not os.path.exists(Configuration.wordlist):
+                if verbose:
+                    Color.pl('{!} {R}Error: Wordlist required for hybrid attack mode 6{W}')
+                return None
+            command.append(Configuration.wordlist)
+            command.append(mask)
+        elif attack_mode == '7':
+            if not Configuration.wordlist or not os.path.exists(Configuration.wordlist):
+                if verbose:
+                    Color.pl('{!} {R}Error: Wordlist required for hybrid attack mode 7{W}')
+                return None
+            command.append(mask)
+            command.append(Configuration.wordlist)
+        
+        if Hashcat.should_use_force():
+            command.append('--force')
+            
+        if verbose:
+            Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
+            
+        hashcat_proc = Process(command)
+        hashcat_proc.wait()
+        stdout = hashcat_proc.stdout()
+        
+        # stdout is guaranteed to be a string from Process.stdout()
+        if ':' not in str(stdout):
+            return None
+        else:
+            key = str(stdout).strip().split(':', 1)[1]
+            return key
+
+    @staticmethod
+    def generate_mask_from_length(length, charset='?a'):
+        '''
+        Generate a hashcat mask pattern from length.
+        Args:
+            length: Password length
+            charset: Charset to use (default ?a = all printable ASCII)
+        Returns:
+            Mask pattern string (e.g., ?a?a?a?a?a for length 5)
+        '''
+        return ''.join([charset] * length)
 
 
 class HcxDumpTool(Dependency):

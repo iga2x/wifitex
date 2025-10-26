@@ -45,26 +45,30 @@ class MultiWordlistCracker:
         return tools
     
     def _get_cracking_strategies(self) -> Dict[str, Dict]:
-        """Get available cracking strategies"""
+        """Get available cracking strategies - auto-detect all wordlists"""
+        # Get all detected wordlists from system and wifitex/wordlists folder
+        all_wordlists = self.wordlist_manager.get_all_wordlists()
+        wordlist_paths = list(all_wordlists.keys())
+        
         return {
             'fast': {
                 'name': 'Fast Attack',
                 'description': 'Use small, fast wordlists first',
-                'wordlists': ['wordlist-top4800-probable', 'common_pass', 'routers-userpass'],
+                'wordlists': wordlist_paths[:3] if len(wordlist_paths) >= 3 else wordlist_paths,  # Top 3
                 'max_time_per_wordlist': 300,  # 5 minutes
                 'tools': ['aircrack-ng']
             },
             'comprehensive': {
                 'name': 'Comprehensive Attack',
-                'description': 'Use all available wordlists in order of effectiveness',
-                'wordlists': ['rockyou', 'wordlist-top4800-probable', 'wifitex', 'sqlmap', 'common'],
+                'description': f'Use ALL {len(wordlist_paths)} detected wordlists',
+                'wordlists': wordlist_paths,  # ALL detected wordlists
                 'max_time_per_wordlist': 1800,  # 30 minutes
                 'tools': ['aircrack-ng', 'hashcat']
             },
             'router_focused': {
                 'name': 'Router-Focused Attack',
                 'description': 'Focus on router default credentials and common passwords',
-                'wordlists': ['routers-userpass', 'common_pass', 'wordlist-top4800-probable'],
+                'wordlists': wordlist_paths[:5] if len(wordlist_paths) >= 5 else wordlist_paths,  # Top 5
                 'max_time_per_wordlist': 600,  # 10 minutes
                 'tools': ['aircrack-ng']
             },
@@ -104,12 +108,18 @@ class MultiWordlistCracker:
         # Get wordlists to use
         if custom_wordlists:
             wordlists_to_use = custom_wordlists
+            # Custom wordlists are already paths, use them directly
+            wordlist_paths = custom_wordlists
         else:
             strategy_config = self.cracking_strategies.get(strategy, self.cracking_strategies['fast'])
             wordlists_to_use = strategy_config['wordlists']
-        
-        # Get actual wordlist paths
-        wordlist_paths = self._resolve_wordlist_paths(wordlists_to_use)
+            
+            # If strategy provides paths directly (auto-detected), use them
+            if isinstance(wordlists_to_use, list) and wordlists_to_use and os.path.exists(str(wordlists_to_use[0])):
+                wordlist_paths = wordlists_to_use  # Already resolved paths
+            else:
+                # Otherwise resolve wordlist names to paths
+                wordlist_paths = self._resolve_wordlist_paths(wordlists_to_use)
         
         if not wordlist_paths:
             return {
