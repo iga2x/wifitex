@@ -82,34 +82,85 @@ class Hashcat(Dependency):
             return {}
 
     @staticmethod
+    def get_wordlists():
+        """Get list of wordlists to try in order"""
+        wordlists = []
+        
+        # Add primary wordlist first
+        if Configuration.wordlist and os.path.exists(Configuration.wordlist):
+            wordlists.append(Configuration.wordlist)
+        
+        # Add rockyou.txt if it exists
+        rockyou_paths = [
+            '/usr/share/wordlists/rockyou.txt',
+            '/usr/share/wordlists/rockyou.txt.gz',
+            './wordlists/rockyou.txt',
+            'rockyou.txt'
+        ]
+        for path in rockyou_paths:
+            if os.path.exists(path):
+                wordlists.append(path)
+                break
+        
+        # Add other common wordlists
+        additional_wordlists = [
+            './wordlist-top4800-probable.txt',
+            '/usr/share/dict/wordlist-top4800-probable.txt',
+            '/usr/share/wfuzz/wordlist/fuzzdb/wordlists-user-passwd/passwds/phpbb.txt',
+            '/usr/share/wordlists/fern-wifi/common.txt'
+        ]
+        for wlist in additional_wordlists:
+            if os.path.exists(wlist) and wlist not in wordlists:
+                wordlists.append(wlist)
+        
+        return wordlists
+
+    @staticmethod
     def crack_handshake(handshake, show_command=False):
+        """Try to crack handshake using multiple wordlists"""
         # Generate hccapx (modern format)
         hccapx_file = HcxPcapTool.generate_hccapx_file(
                 handshake, show_command=show_command)
 
+        # Get list of wordlists to try
+        wordlists = Hashcat.get_wordlists()
+        
         key = None
-        # Crack hccapx using modern hashcat format (22000)
-        for additional_arg in ([], ['--show']):
-            command = [
-                'hashcat',
-                '--quiet',
-                '-m', '22000',  # Modern WPA-PBKDF2-PMKID+EAPOL format
-                hccapx_file,
-                Configuration.wordlist
-            ]
-            if Hashcat.should_use_force():
-                command.append('--force')
-            command.extend(additional_arg)
-            if show_command:
-                Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
-            process = Process(command)
-            stdout, stderr = process.get_output()
-            # stdout is guaranteed to be a string from Process.get_output()
-            if ':' not in str(stdout):
+        for wordlist in wordlists:
+            if not os.path.exists(wordlist):
                 continue
-            else:
+                
+            if show_command:
+                Color.pl('{+} {C}Trying wordlist: {G}%s{W}' % os.path.basename(wordlist))
+            
+            # Try cracking with this wordlist
+            for additional_arg in ([], ['--show']):
+                command = [
+                    'hashcat',
+                    '--quiet',
+                    '-m', '22000',  # Modern WPA-PBKDF2-PMKID+EAPOL format
+                    hccapx_file,
+                    wordlist
+                ]
+                if Hashcat.should_use_force():
+                    command.append('--force')
+                command.extend(additional_arg)
+                if show_command:
+                    Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
+                process = Process(command)
+                stdout, stderr = process.get_output()
                 # stdout is guaranteed to be a string from Process.get_output()
-                key = str(stdout).split(':', 5)[-1].strip()
+                if ':' not in str(stdout):
+                    continue
+                else:
+                    # stdout is guaranteed to be a string from Process.get_output()
+                    key = str(stdout).split(':', 5)[-1].strip()
+                    break
+            
+            # If we found the key, stop trying other wordlists
+            if key:
+                if show_command:
+                    Color.pl('{+} {G}Password found using %s!{W}' % os.path.basename(wordlist))
                 break
 
         if os.path.exists(hccapx_file):
@@ -180,7 +231,7 @@ class HcxDumpTool(Dependency):
             '--filterlist', filterlist,
             '--filtermode', '2',
             '-c', str(target.channel),
-            '-w', pcapng_file
+            '-o', pcapng_file
         ]
 
         self.proc = Process(command)
@@ -254,7 +305,7 @@ class HcxPcapTool(Dependency):
 
         command = [
             'hcxpcapngtool',
-            '-z', self.pmkid_file,
+            '--pmkid', self.pmkid_file,
             pcapng_file
         ]
         hcxpcap_proc = Process(command)
