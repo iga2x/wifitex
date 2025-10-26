@@ -2305,13 +2305,12 @@ class ScanWorker(QThread):
             # Only specify channel if user explicitly selected one
             if self.channel and self.channel > 0:
                 cmd.extend(['-c', str(self.channel)])
-            # If no specific channel, scan all channels (both 2.4GHz and 5GHz)
-            elif self.five_ghz:
-                cmd.extend(['--band', 'a'])  # 5GHz only
-            # For comprehensive scanning (channel=0), scan all available channels
+            # For comprehensive scanning, scan ALL bands (2.4GHz, 5GHz, 6GHz, 7GHz)
+            # Don't specify band - let airodump scan all available channels automatically
             else:
-                # Don't specify band - let airodump scan all available channels automatically
-                # This will scan both 2.4GHz and 5GHz bands
+                # By default, airodump scans 2.4GHz and 5GHz
+                # Additional bands (6GHz, 7GHz) are automatically detected if supported
+                # No need to specify bands - let airodump handle it
                 pass
                 
             self.scan_progress.emit({'message': f'Starting network scan on {self.interface}...'})
