@@ -2436,6 +2436,7 @@ class WifitexMainWindow(QMainWindow):
         
         # Default credential folder locations
         cred_folders = [
+            "./karma_captures/credentials/",  # Current directory karma_captures
             os.path.expanduser("~/wifitex/karma_captures/credentials/"),
             os.path.expanduser("~/wifitex/credentials/"),
             "./credentials/",
