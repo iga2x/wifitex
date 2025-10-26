@@ -36,3 +36,7 @@ captures/
 *.log
 *.tmp
 
+
+# Large wordlist files excluded from git
+wifitex/wordlists/rockyou.txt
+wifitex/wordlists/ignis-10M.txt

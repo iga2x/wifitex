@@ -9,7 +9,6 @@ from ..util.color import Color
 import os
 import subprocess
 from subprocess import PIPE, DEVNULL
-import sys
 
 
 class Hashcat(Dependency):
@@ -296,8 +295,8 @@ class Hashcat(Dependency):
         if show_command:
             Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
             
-        # Create process with stderr=sys.stderr to show real-time progress
-        process = Process(command, stdout=PIPE, stderr=sys.stderr)  # type: ignore[arg-type]
+        # Create process - don't capture stderr so progress shows in real-time
+        process = Process(command, stdout=PIPE, stderr=None)  # type: ignore[arg-type]
         stdout, stderr = process.get_output()
         
         key = None
@@ -352,8 +351,8 @@ class Hashcat(Dependency):
         if verbose:
             Color.pl('{+} {D}Running: {W}{P}%s{W}' % ' '.join(command))
             
-        # Create process with stderr=sys.stderr to show real-time progress  
-        hashcat_proc = Process(command, stdout=PIPE, stderr=sys.stderr)  # type: ignore[arg-type]
+        # Create process - don't capture stderr so progress shows in real-time
+        hashcat_proc = Process(command, stdout=PIPE, stderr=None)  # type: ignore[arg-type]
         hashcat_proc.wait()
         stdout = hashcat_proc.stdout()
         

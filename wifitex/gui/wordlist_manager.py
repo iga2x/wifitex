@@ -25,15 +25,16 @@ class WordlistManager:
     
     def scan_system_wordlists(self):
         """Scan system for available wordlists"""
-        # Get all wordlist paths dynamically
-        wordlist_paths = cast(List[str], get_dynamic_wordlist_paths() or [])
+        # Initialize with empty list
+        wordlist_paths = []
         
-        # Add wifitex/wordlists folder FIRST (local wordlists have priority)
+        # FIRST: Scan wifitex/wordlists folder (default wordlists)
         try:
             # Get the path to wifitex/wordlists folder
-            from .path_utils import get_project_root
-            project_root = get_project_root() or os.path.dirname(os.path.dirname(__file__))
-            wifitex_wordlists_dir = os.path.join(project_root, 'wordlists')
+            # The wordlists are in the same directory as this file (wifitex/gui/wordlist_manager.py)
+            # So we need to go: wifitex/gui -> wifitex -> wifitex/wordlists
+            wifitex_package_dir = os.path.dirname(os.path.dirname(__file__))
+            wifitex_wordlists_dir = os.path.join(wifitex_package_dir, 'wordlists')
             
             if os.path.exists(wifitex_wordlists_dir) and os.path.isdir(wifitex_wordlists_dir):
                 # Scan all .txt, .lst, .gz files in wifitex/wordlists folder
@@ -41,10 +42,15 @@ class WordlistManager:
                     for file in files:
                         if any(ext in file.lower() for ext in ['.txt', '.lst', '.gz']):
                             wifitex_wordlist_path = os.path.join(root, file)
-                            wordlist_paths.insert(0, wifitex_wordlist_path)  # Add to front for priority
-                            logger.info(f"Detected wifitex wordlist: {file}")
+                            wordlist_paths.append(wifitex_wordlist_path)  # Add to front for priority
+                            logger.info(f"Detected wifitex wordlist (default): {file}")
         except Exception as e:
             logger.debug(f"Could not scan wifitex/wordlists folder: {e}")
+        
+        # SECOND: Add system wordlists (extra wordlists)
+        system_wordlists = cast(List[str], get_dynamic_wordlist_paths() or [])
+        if system_wordlists:
+            wordlist_paths.extend(system_wordlists)
         
         # Add some specific common paths that might not be found by the dynamic search
         # Use dynamic system share directory detection

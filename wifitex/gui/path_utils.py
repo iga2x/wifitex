@@ -180,16 +180,16 @@ def get_dynamic_wordlist_paths() -> List[str]:
     Get all available wordlist paths dynamically.
     
     Returns:
-        list: List of all found wordlist paths
+        list: List of all found wordlist paths (EXCLUDES wifitex/wordlists folder)
     """
     wordlist_paths = []
     
-    # Add project wordlist
+    # Add project wordlist (legacy single file support)
     project_wordlist = get_wordlist_path()
     if project_wordlist:
         wordlist_paths.append(project_wordlist)
     
-    # Add system wordlists
+    # Add system wordlists (NOT including wifitex/wordlists folder)
     system_wordlists = find_system_wordlists()
     if system_wordlists:
         wordlist_paths.extend(system_wordlists)

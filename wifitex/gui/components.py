@@ -258,55 +258,82 @@ class AttackManager(QWidget):
         
     def stop_attack(self):
         """Stop current attack"""
-        with self._attack_lock:
-            if self.attack_thread and self.attack_thread.isRunning():
-                # Disable terminal capture to stop logs immediately
-                if hasattr(self.attack_thread, 'disable_terminal_capture'):
-                    self.attack_thread.disable_terminal_capture()
-                
-                # Set stop flag first
-                if hasattr(self.attack_thread, 'running'):
-                    self.attack_thread.running = False
-                if hasattr(self.attack_thread, 'skip_current_attack'):
-                    self.attack_thread.skip_current_attack = True
-                if hasattr(self.attack_thread, 'should_skip_current_attack'):
-                    self.attack_thread.should_skip_current_attack = True
-                
-                # Force cleanup of attack processes (most aggressive)
-                if hasattr(self.attack_thread, 'force_cleanup'):
-                    self.attack_thread.force_cleanup()
-                
-                # Also kill processes directly
-                self._kill_attack_processes()
-                
-                # Stop the thread
-                if hasattr(self.attack_thread, 'stop'):
-                    self.attack_thread.stop()
-                
-                self.attack_thread.wait(3000)  # Wait up to 3 seconds
-                if self.attack_thread.isRunning():
-                    self.attack_thread.terminate()
-                    self.attack_thread.wait(1000)  # Wait another second
-                
-                # Final cleanup of the attack worker
-                if hasattr(self.attack_thread, 'cleanup'):
-                    self.attack_thread.cleanup()
-                
-                # Ensure terminal capture is disabled
-                if hasattr(self.attack_thread, 'disable_terminal_capture'):
-                    self.attack_thread.disable_terminal_capture()
+        try:
+            with self._attack_lock:
+                if self.attack_thread and self.attack_thread.isRunning():
+                    # Disable terminal capture to stop logs immediately
+                    if hasattr(self.attack_thread, 'disable_terminal_capture'):
+                        try:
+                            self.attack_thread.disable_terminal_capture()
+                        except Exception:
+                            pass
                     
+                    # Set stop flag first
+                    if hasattr(self.attack_thread, 'running'):
+                        self.attack_thread.running = False
+                    if hasattr(self.attack_thread, 'skip_current_attack'):
+                        self.attack_thread.skip_current_attack = True
+                    if hasattr(self.attack_thread, 'should_skip_current_attack'):
+                        self.attack_thread.should_skip_current_attack = True
+                    
+                    # Force cleanup of attack processes (most aggressive) - do this FIRST
+                    self._kill_attack_processes()
+                    
+                    # Try to stop gracefully
+                    try:
+                        if hasattr(self.attack_thread, 'force_cleanup'):
+                            self.attack_thread.force_cleanup()
+                    except Exception:
+                        pass
+                    
+                    # Stop the thread gracefully first
+                    try:
+                        if hasattr(self.attack_thread, 'stop'):
+                            self.attack_thread.stop()
+                    except Exception:
+                        pass
+                    
+                    # Wait for thread to finish gracefully
+                    try:
+                        finished = self.attack_thread.wait(2000)  # Wait up to 2 seconds
+                        if not finished:
+                            # Thread didn't finish gracefully, terminate it
+                            if self.attack_thread.isRunning():
+                                self.attack_thread.terminate()
+                                self.attack_thread.wait(1000)  # Wait another second
+                    except Exception:
+                        pass
+                    
+                    # Final cleanup
+                    try:
+                        if hasattr(self.attack_thread, 'cleanup'):
+                            self.attack_thread.cleanup()
+                    except Exception:
+                        pass
+                        
             # Always reset attack state when stopping
             self.attacking = False
             
-            # Emit attack completed signal to update UI
-            self.attack_completed.emit({
-                'success': False,
-                'message': 'Attack stopped by user',
-                'network': {'essid': 'Current attack', 'bssid': 'N/A'},
-                'stopped': True,
-                'all_completed': True
-            })
+            # Emit attack completed signal to update UI (outside of lock to avoid deadlock)
+            try:
+                self.attack_completed.emit({
+                    'success': False,
+                    'message': 'Attack stopped by user',
+                    'network': {'essid': 'Current attack', 'bssid': 'N/A'},
+                    'stopped': True,
+                    'all_completed': True
+                })
+            except Exception:
+                pass
+                
+        except Exception as e:
+            # If anything fails, at least try to kill processes and reset state
+            try:
+                self._kill_attack_processes()
+                self.attacking = False
+            except Exception:
+                pass
+            logger.error(f"Error stopping attack: {e}")
         
     def skip_current_attack(self):
         """Skip current attack and move to next target"""
@@ -350,6 +377,7 @@ class AttackManager(QWidget):
             import subprocess
             import os
             import signal
+            import time
             
             # Use global process cleanup for all tracked processes
             if Process is not None:
@@ -359,17 +387,31 @@ class AttackManager(QWidget):
             attack_tools = [
                 'reaver', 'bully', 'aircrack-ng', 'aireplay-ng', 'airodump-ng', 
                 'hcxdumptool', 'hcxpcapngtool', 'hashcat', 'tshark', 'hostapd', 
-                'dnsmasq', 'wash', 'pixiewps'
+                'dnsmasq', 'wash', 'pixiewps', 'airodump', 'aireplay', 'wpa_supplicant'
             ]
             
             for tool in attack_tools:
                 try:
                     # First try graceful termination
-                    subprocess.run(['pkill', '-TERM', '-f', tool], capture_output=True, timeout=2)
+                    subprocess.run(['pkill', '-TERM', '-f', tool], capture_output=True)
+                    time.sleep(0.1)
                     # Then force kill if still running
-                    subprocess.run(['pkill', '-KILL', '-f', tool], capture_output=True, timeout=1)
+                    subprocess.run(['pkill', '-KILL', '-f', tool], capture_output=True)
+                    time.sleep(0.1)
                     # Also try killing by exact process name
-                    subprocess.run(['killall', '-9', tool], capture_output=True, timeout=1)
+                    subprocess.run(['killall', '-9', tool], capture_output=True, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            
+            # Additional KARMA-specific cleanup
+            karma_keywords = [
+                'karma', 'hostapd', 'dnsmasq', 'airodump', 'aireplay',
+                'tshark.*karma', 'airodump.*karma'
+            ]
+            
+            for keyword in karma_keywords:
+                try:
+                    subprocess.run(['pkill', '-KILL', '-f', keyword], capture_output=True, stderr=subprocess.DEVNULL)
                 except Exception:
                     pass
             
@@ -387,6 +429,14 @@ class AttackManager(QWidget):
                                 os.kill(pid_int, signal.SIGKILL)
                         except (ValueError, ProcessLookupError, PermissionError):
                             pass
+            except Exception:
+                pass
+            
+            # Final cleanup - kill all airodump processes
+            try:
+                subprocess.run(['killall', '-9', 'airodump-ng'], capture_output=True, stderr=subprocess.DEVNULL)
+                subprocess.run(['killall', '-9', 'hostapd'], capture_output=True, stderr=subprocess.DEVNULL)
+                subprocess.run(['killall', '-9', 'dnsmasq'], capture_output=True, stderr=subprocess.DEVNULL)
             except Exception:
                 pass
                 
@@ -789,48 +839,6 @@ class SettingsPanel(QWidget):
         self.hashcat_cb.setChecked(True)
         cracking_layout.addWidget(self.hashcat_cb)
         
-        # Brute force attack options
-        cracking_layout.addWidget(QLabel("Brute Force Attack:"))
-        self.brute_force_cb = QCheckBox("Enable Brute Force Attack")
-        self.brute_force_cb.setChecked(False)
-        self.brute_force_cb.setToolTip("Try all possible password combinations using mask patterns (VERY SLOW)")
-        cracking_layout.addWidget(self.brute_force_cb)
-        
-        # Brute force mode
-        mode_layout = QHBoxLayout()
-        mode_layout.addWidget(QLabel("Attack Mode:"))
-        self.brute_force_mode_combo = QComboBox()
-        self.brute_force_mode_combo.addItems([
-            "Dictionary (0)",
-            "Pure Brute Force (3)",
-            "Hybrid Wordlist+Mask (6)",
-            "Hybrid Mask+Wordlist (7)"
-        ])
-        self.brute_force_mode_combo.setCurrentIndex(1)  # Default to pure brute force
-        self.brute_force_mode_combo.setToolTip("0=Dictionary, 3=Brute Force, 6=Hybrid(wl+m), 7=Hybrid(m+wl)")
-        mode_layout.addWidget(self.brute_force_mode_combo)
-        cracking_layout.addLayout(mode_layout)
-        
-        # Brute force mask
-        mask_layout = QHBoxLayout()
-        mask_layout.addWidget(QLabel("Mask Pattern:"))
-        self.brute_force_mask_edit = QLineEdit()
-        self.brute_force_mask_edit.setText("?a?a?a?a?a?a?a?a")
-        self.brute_force_mask_edit.setPlaceholderText("?a?a?a?a?a?a?a?a")
-        self.brute_force_mask_edit.setToolTip("?l=lowercase ?u=uppercase ?d=digits ?s=special ?a=all ASCII")
-        mask_layout.addWidget(self.brute_force_mask_edit)
-        cracking_layout.addLayout(mask_layout)
-        
-        # Timeout
-        timeout_layout = QHBoxLayout()
-        timeout_layout.addWidget(QLabel("Max Time (min):"))
-        self.brute_force_timeout_spin = QSpinBox()
-        self.brute_force_timeout_spin.setRange(1, 1440)  # 1 min to 24 hours
-        self.brute_force_timeout_spin.setValue(60)  # Default 1 hour
-        self.brute_force_timeout_spin.setToolTip("Maximum time in minutes for brute force attempts")
-        timeout_layout.addWidget(self.brute_force_timeout_spin)
-        cracking_layout.addLayout(timeout_layout)
-        
         layout.addWidget(cracking_group)
         
         # KARMA attack settings
@@ -843,10 +851,16 @@ class SettingsPanel(QWidget):
         self.karma_dns_spoofing_cb.setToolTip("Enable DNS redirection for traffic interception. Disable for pure Layer 2 KARMA only.")
         karma_layout.addWidget(self.karma_dns_spoofing_cb)
         
-        # Handshake cracking option
-        self.karma_handshake_cracking_cb = QCheckBox("Enable Handshake Capture & Cracking")
+        # Handshake capture option (enabled by default)
+        self.karma_handshake_capture_cb = QCheckBox("Enable Handshake Capture")
+        self.karma_handshake_capture_cb.setChecked(True)  # Default enabled
+        self.karma_handshake_capture_cb.setToolTip("Capture WPA handshakes from connected clients (saved for offline cracking)")
+        karma_layout.addWidget(self.karma_handshake_capture_cb)
+        
+        # Handshake cracking option (disabled by default)
+        self.karma_handshake_cracking_cb = QCheckBox("Enable Handshake Cracking")
         self.karma_handshake_cracking_cb.setChecked(False)  # Default disabled
-        self.karma_handshake_cracking_cb.setToolTip("Enable WPA handshake capture and offline cracking for connected clients")
+        self.karma_handshake_cracking_cb.setToolTip("Attempt to crack captured handshakes automatically (CPU/GPU intensive)")
         karma_layout.addWidget(self.karma_handshake_cracking_cb)
         
         # Probe timeout
@@ -975,7 +989,8 @@ class SettingsPanel(QWidget):
         """Load default settings if no config manager is available"""
         # Set default values
         self.karma_dns_spoofing_cb.setChecked(False)
-        self.karma_handshake_cracking_cb.setChecked(False)
+        self.karma_handshake_capture_cb.setChecked(True)  # Enabled by default
+        self.karma_handshake_cracking_cb.setChecked(False)  # Disabled by default
         self.karma_probe_timeout_spin.setValue(60)
         self.karma_min_probes_spin.setValue(1)
         self.karma_all_channels_cb.setChecked(False)
@@ -1069,6 +1084,8 @@ class SettingsPanel(QWidget):
             # Load KARMA settings
             if 'karma_dns_spoofing' in settings:
                 self.karma_dns_spoofing_cb.setChecked(settings['karma_dns_spoofing'])
+            if 'karma_handshake_capture' in settings:
+                self.karma_handshake_capture_cb.setChecked(settings['karma_handshake_capture'])
             if 'karma_handshake_cracking' in settings:
                 self.karma_handshake_cracking_cb.setChecked(settings['karma_handshake_cracking'])
             if 'karma_probe_timeout' in settings:
@@ -1140,6 +1157,7 @@ class SettingsPanel(QWidget):
                 
                 # KARMA settings
                 'karma_dns_spoofing': self.karma_dns_spoofing_cb.isChecked(),
+                'karma_handshake_capture': self.karma_handshake_capture_cb.isChecked(),
                 'karma_handshake_cracking': self.karma_handshake_cracking_cb.isChecked(),
                 'karma_probe_timeout': self.karma_probe_timeout_spin.value(),
                 'karma_min_probes': self.karma_min_probes_spin.value(),
@@ -1200,6 +1218,7 @@ class SettingsPanel(QWidget):
                 
                 # KARMA settings
                 'karma_dns_spoofing': self.karma_dns_spoofing_cb.isChecked(),
+                'karma_handshake_capture': self.karma_handshake_capture_cb.isChecked(),
                 'karma_handshake_cracking': self.karma_handshake_cracking_cb.isChecked(),
                 'karma_probe_timeout': self.karma_probe_timeout_spin.value(),
                 'karma_min_probes': self.karma_min_probes_spin.value(),
@@ -1257,6 +1276,7 @@ class SettingsPanel(QWidget):
         
         # KARMA settings
         self.karma_dns_spoofing_cb.toggled.connect(self.save_settings)
+        self.karma_handshake_capture_cb.toggled.connect(self.save_settings)
         self.karma_handshake_cracking_cb.toggled.connect(self.save_settings)
         self.karma_probe_timeout_spin.valueChanged.connect(self.save_settings)
         self.karma_min_probes_spin.valueChanged.connect(self.save_settings)
@@ -1275,7 +1295,8 @@ class SettingsPanel(QWidget):
         """Reset all settings to default values"""
         # Reset KARMA settings
         self.karma_dns_spoofing_cb.setChecked(False)
-        self.karma_handshake_cracking_cb.setChecked(False)
+        self.karma_handshake_capture_cb.setChecked(True)  # Enabled by default
+        self.karma_handshake_cracking_cb.setChecked(False)  # Disabled by default
         self.karma_probe_timeout_spin.setValue(60)
         self.karma_min_probes_spin.setValue(1)
         self.karma_all_channels_cb.setChecked(False)
@@ -1342,28 +1363,42 @@ class SettingsPanel(QWidget):
         """Populate the wordlist combo box with available wordlists"""
         try:
             from .wordlist_manager import wordlist_manager
+            import os
             
-            # Get recommended wordlists
-            recommended = wordlist_manager.get_recommended_wordlists()
+            # Get wifitex package directory to identify default wordlists
+            # The wordlists are in the same directory as wordlist_manager (wifitex/gui/wordlist_manager.py)
+            # So we need to go: wifitex/gui -> wifitex -> wifitex/wordlists
+            wifitex_package_dir = os.path.dirname(os.path.dirname(__file__))
+            wifitex_wordlists_dir = os.path.join(wifitex_package_dir, 'wordlists')
             
-            for path, info in recommended:
-                display_name = f"{info['name']} ({info['description']})"
-                self.wordlist_combo.addItem(display_name, path)
-            
-            # Add all other wordlists
+            # Get all wordlists
             all_wordlists = wordlist_manager.get_all_wordlists()
-            # Get existing paths once to avoid repeated lookups
-            existing_paths = set()
-            for i in range(self.wordlist_combo.count()):
-                existing_paths.add(self.wordlist_combo.itemData(i))
+            
+            # Separate wordlists into default (wifitex/wordlists) and extra (system)
+            default_wordlists = []
+            extra_wordlists = []
             
             for path, info in all_wordlists.items():
-                # Skip if already added (efficient set lookup)
-                if path in existing_paths:
-                    continue
+                # Check if this is a default wordlist from wifitex/wordlists folder
+                is_default = wifitex_wordlists_dir and path.startswith(wifitex_wordlists_dir)
                 
-                display_name = f"{info['name']} ({info['description']})"
-                self.wordlist_combo.addItem(display_name, path)
+                if is_default:
+                    default_wordlists.append((path, info))
+                else:
+                    extra_wordlists.append((path, info))
+            
+            # First, add default wordlists (from wifitex/wordlists)
+            if default_wordlists:
+                # Add default wordlists with clear label
+                for path, info in default_wordlists:
+                    display_name = f"📁 {info['name']}"
+                    self.wordlist_combo.addItem(display_name, path)
+            
+            # Then, add extra/system wordlists
+            if extra_wordlists:
+                for path, info in extra_wordlists:
+                    display_name = f"⚙️ {info['name']}"
+                    self.wordlist_combo.addItem(display_name, path)
                 
         except Exception as e:
             logger.error(f"Error populating wordlist combo: {e}")
@@ -3653,8 +3688,19 @@ class AttackWorker(QThread):
                 elif self.Configuration.brute_force_mode in ['6', '7']:
                     self.log_message.emit(f"Brute force enabled: Hybrid mode {self.Configuration.brute_force_mode} with mask {self.Configuration.brute_force_mask}")
             
-            # Set wordlist if auto-crack is enabled
+            # Set wordlist if auto-crack is enabled OR if brute force needs it
+            needs_wordlist = False
             if self.options.get('crack', False):
+                needs_wordlist = True
+                self.log_message.emit("Auto-crack enabled: wordlist will be used")
+            elif self.Configuration.use_brute_force:
+                # Check if brute force mode requires a wordlist (modes 0, 6, 7)
+                brute_mode = self.Configuration.brute_force_mode
+                if brute_mode in ['0', '6', '7']:
+                    needs_wordlist = True
+                    self.log_message.emit(f"Brute force mode {brute_mode} requires wordlist")
+            
+            if needs_wordlist:
                 # Use enhanced wordlist selection
                 cracking_strategy = self.options.get('cracking_strategy', 'fast')
                 
@@ -3690,9 +3736,12 @@ class AttackWorker(QThread):
                     else:
                         self.log_message.emit("Warning: Project wordlist not found")
             else:
-                # Disable wordlist if auto-crack is not enabled
+                # No wordlist needed (pure brute force mode 3 only)
                 self.Configuration.wordlist = None
-                self.log_message.emit("Auto-crack disabled, wordlist not set")
+                if self.Configuration.use_brute_force and self.Configuration.brute_force_mode == '3':
+                    self.log_message.emit("Pure brute force mode - no wordlist needed")
+                else:
+                    self.log_message.emit("Auto-crack disabled, wordlist not set")
             
             # Override Color.pattack to capture all attack progress messages
             self._setup_attack_logging()
@@ -4596,6 +4645,7 @@ class AttackWorker(QThread):
                 Configuration.karma_min_probes = self.options.get('karma_min_probes', 1)
                 Configuration.karma_capture_all_channels = self.options.get('karma_all_channels', False)
                 Configuration.karma_dns_spoofing = self.options.get('karma_dns_spoofing', False)  # Changed default from True to False
+                Configuration.karma_handshake_capture = self.options.get('karma_handshake_capture', True)  # Default enabled
                 Configuration.karma_handshake_cracking = self.options.get('karma_handshake_cracking', False)  # Default disabled
                 
                 # Set KARMA client monitoring settings
@@ -4613,6 +4663,7 @@ class AttackWorker(QThread):
                 self.log_message.emit(f"[KARMA]   karma_min_probes: {Configuration.karma_min_probes}")
                 self.log_message.emit(f"[KARMA]   karma_capture_all_channels: {Configuration.karma_capture_all_channels}")
                 self.log_message.emit(f"[KARMA]   karma_dns_spoofing: {Configuration.karma_dns_spoofing}")
+                self.log_message.emit(f"[KARMA]   karma_handshake_capture: {Configuration.karma_handshake_capture}")
                 self.log_message.emit(f"[KARMA]   karma_handshake_cracking: {Configuration.karma_handshake_cracking}")
                 self.log_message.emit(f"[KARMA]   karma_client_monitoring: {Configuration.karma_client_monitoring}")
                 self.log_message.emit(f"[KARMA]   karma_traffic_capture: {Configuration.karma_traffic_capture}")

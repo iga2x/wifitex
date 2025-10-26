@@ -78,7 +78,8 @@ class Configuration(object):
         cls.karma_capture_all_channels = False  # Capture probes from all channels
         cls.karma_min_probes = 1  # Minimum number of probe requests to capture before starting attack
         cls.karma_dns_spoofing = True  # Enable DNS spoofing for Layer 7 attacks (enabled for credential harvesting)
-        cls.karma_handshake_cracking = True  # Enable handshake capture and cracking (enabled by default)
+        cls.karma_handshake_capture = True  # Enable handshake capture (enabled by default)
+        cls.karma_handshake_cracking = False  # Enable handshake cracking (disabled by default - enable only if needed)
         cls.karma_encryption = 'mixed'  # AP encryption: 'wpa', 'wpa2', 'wpa3', 'mixed', 'none' (default: 'mixed')
         
         # KARMA Client Monitoring & Data Access Settings
@@ -96,6 +97,7 @@ class Configuration(object):
         cls.karma_handshakes_dir = 'karma_captures/handshakes'  # KARMA handshakes
         cls.karma_credentials_dir = 'karma_captures/credentials'  # Credential harvests
         cls.karma_traffic_dir = 'karma_captures/traffic'  # Client traffic
+        cls.karma_live_monitoring_dir = 'karma_captures/live_monitoring'  # Live monitoring captures
 
         # WPA/WPA2/WPA3 variables
 

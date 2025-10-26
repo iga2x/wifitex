@@ -53,8 +53,24 @@ class WifitexGUIApplication(QApplication):
         signal.signal(signal.SIGTERM, self.signal_handler)
         
     def signal_handler(self, signum, frame):
-        """Handle system signals"""
+        """Handle system signals - comprehensive cleanup before exit"""
         print(f"\nReceived signal {signum}, shutting down gracefully...")
+        
+        # Comprehensive cleanup before quitting
+        try:
+            if self.main_window:
+                self.main_window._comprehensive_cleanup()
+        except Exception:
+            # If main window cleanup fails, do basic cleanup
+            import subprocess
+            try:
+                subprocess.run(['killall', '-9', 'hostapd', 'dnsmasq', 'airodump-ng'], 
+                             capture_output=True, stderr=subprocess.DEVNULL)
+                subprocess.run(['systemctl', 'restart', 'NetworkManager'], 
+                             capture_output=True, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        
         self.quit()
         
     def show_splash_screen(self):

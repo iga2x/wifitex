@@ -311,9 +311,13 @@ class WifitexMainWindow(QMainWindow):
         self.karma_all_channels_cb = QCheckBox("Capture from all channels")
         self.karma_options_layout.addWidget(self.karma_all_channels_cb, 1, 0, 1, 2)
         
-        self.karma_handshake_cracking_cb = QCheckBox("Enable Handshake Capture & Cracking")
+        self.karma_handshake_capture_cb = QCheckBox("Enable Handshake Capture")
+        self.karma_handshake_capture_cb.setChecked(True)  # Default enabled
+        self.karma_options_layout.addWidget(self.karma_handshake_capture_cb, 1, 2, 1, 1)
+        
+        self.karma_handshake_cracking_cb = QCheckBox("Enable Handshake Cracking")
         self.karma_handshake_cracking_cb.setChecked(False)  # Default disabled
-        self.karma_options_layout.addWidget(self.karma_handshake_cracking_cb, 1, 2, 1, 2)
+        self.karma_options_layout.addWidget(self.karma_handshake_cracking_cb, 1, 3, 1, 1)
         
         self.karma_options_group.setVisible(False)
         options_layout.addWidget(self.karma_options_group, 2, 0, 1, 4)
@@ -1287,15 +1291,16 @@ class WifitexMainWindow(QMainWindow):
             'multi_wordlist': self.settings_panel.multi_wordlist_cb.isChecked(),
             'use_aircrack': self.settings_panel.aircrack_cb.isChecked(),
             'use_hashcat': self.settings_panel.hashcat_cb.isChecked(),
-            # Brute force options
+            # Brute force options (from GPU-Accelerated section)
             'use_brute_force': self.settings_panel.brute_force_cb.isChecked(),
-            'brute_force_mode': self.settings_panel.brute_force_mode_combo.currentIndex(),
-            'brute_force_mask': self.settings_panel.brute_force_mask_edit.text(),
-            'brute_force_timeout': self.settings_panel.brute_force_timeout_spin.value() * 60,  # Convert minutes to seconds
+            'brute_force_mode': self.settings_panel.brute_mode_combo.currentIndex(),
+            'brute_force_mask': self.settings_panel.mask_combo.currentText() == "Custom Pattern" and self.settings_panel.custom_mask_edit.text() or self.settings_panel.mask_patterns.get(self.settings_panel.mask_combo.currentText(), "?d?d?d?d?d?d"),
+            'brute_force_timeout': self.settings_panel.brute_timeout_spin.value() * 60,  # Convert minutes to seconds
             # KARMA Attack specific options
             'karma_probe_timeout': self.karma_probe_timeout_spin.value(),
             'karma_min_probes': self.karma_min_probes_spin.value(),
             'karma_all_channels': self.karma_all_channels_cb.isChecked(),
+            'karma_handshake_capture': self.karma_handshake_capture_cb.isChecked(),
             'karma_handshake_cracking': self.karma_handshake_cracking_cb.isChecked(),
             'karma_dns_spoofing': self.settings_panel.karma_dns_spoofing_cb.isChecked()
         }
@@ -2079,11 +2084,13 @@ class WifitexMainWindow(QMainWindow):
                 # MAC Address
                 self.client_list_table.setItem(row, 0, QTableWidgetItem(str(client.get('mac', 'Unknown'))))
                 
-                # IP Address (not available from KARMA status)
-                self.client_list_table.setItem(row, 1, QTableWidgetItem("N/A"))
+                # IP Address (from dnsmasq lease file)
+                ip_address = client.get('ip_address', 'N/A')
+                self.client_list_table.setItem(row, 1, QTableWidgetItem(str(ip_address)))
                 
-                # Hostname (not available from KARMA status)
-                self.client_list_table.setItem(row, 2, QTableWidgetItem("N/A"))
+                # Hostname (from dnsmasq lease file)
+                hostname = client.get('hostname', 'N/A')
+                self.client_list_table.setItem(row, 2, QTableWidgetItem(str(hostname)))
                 
                 # Connection Time
                 self.client_list_table.setItem(row, 3, QTableWidgetItem("Connected"))
@@ -2224,9 +2231,48 @@ class WifitexMainWindow(QMainWindow):
             mac_item = self.client_list_table.item(row, 0)
             mac = mac_item.text() if mac_item else "Unknown"
             
-            # TODO: Implement traffic viewing logic
+            # Implement traffic viewing logic
             self.log_update.emit(f"[CLIENT] Viewing traffic for client {mac}")
-            QMessageBox.information(self, "Traffic View", f"Opening traffic view for client {mac}")
+            
+            # Find traffic capture files for this client
+            import glob
+            mac_formatted = mac.replace(':', '-')
+            traffic_dirs = [
+                "karma_captures/traffic/",
+                os.path.expanduser("~/wifitex/karma_captures/traffic/"),
+            ]
+            
+            cap_files = []
+            for dir_path in traffic_dirs:
+                if os.path.exists(dir_path):
+                    pattern = os.path.join(dir_path, f"*{mac_formatted}*.cap")
+                    cap_files.extend(glob.glob(pattern))
+            
+            if not cap_files:
+                QMessageBox.warning(self, "No Traffic Files", 
+                    f"No traffic capture files found for client {mac}.\n\nPlease ensure you have captured traffic from this client first.")
+                return
+            
+            # Open the most recent capture file with Wireshark
+            most_recent = max(cap_files, key=os.path.getmtime)
+            
+            try:
+                if os.path.exists(most_recent):
+                    # Launch Wireshark
+                    subprocess.Popen(['wireshark', most_recent], 
+                                   stdout=subprocess.DEVNULL, 
+                                   stderr=subprocess.DEVNULL)
+                    self.log_update.emit(f"[CLIENT] Opened traffic file: {most_recent}")
+                    QMessageBox.information(self, "Traffic View", 
+                        f"Opening traffic view for client {mac}\n\nFile: {os.path.basename(most_recent)}")
+                else:
+                    QMessageBox.warning(self, "File Not Found", f"Traffic file not found: {most_recent}")
+            except FileNotFoundError:
+                QMessageBox.warning(self, "Wireshark Not Found", 
+                    "Wireshark is not installed. Please install it to view traffic captures.\n\n" +
+                    "Install with: sudo apt install wireshark")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to open traffic file: {e}")
     
     def analyze_client_credentials(self):
         """Analyze credentials for selected client"""
@@ -2240,9 +2286,87 @@ class WifitexMainWindow(QMainWindow):
             mac_item = self.client_list_table.item(row, 0)
             mac = mac_item.text() if mac_item else "Unknown"
             
-            # TODO: Implement credential analysis logic
+            # Implement credential analysis logic
             self.log_update.emit(f"[CLIENT] Analyzing credentials for client {mac}")
-            QMessageBox.information(self, "Credential Analysis", f"Analyzing credentials for client {mac}")
+            
+            # Find traffic capture files for this client
+            import glob
+            mac_formatted = mac.replace(':', '-')
+            traffic_dirs = [
+                "karma_captures/traffic/",
+                os.path.expanduser("~/wifitex/karma_captures/traffic/"),
+            ]
+            
+            cap_files = []
+            for dir_path in traffic_dirs:
+                if os.path.exists(dir_path):
+                    pattern = os.path.join(dir_path, f"*{mac_formatted}*.cap")
+                    cap_files.extend(glob.glob(pattern))
+            
+            if not cap_files:
+                QMessageBox.warning(self, "No Traffic Files", 
+                    f"No traffic capture files found for client {mac}.\n\nPlease ensure you have captured traffic from this client first.")
+                return
+            
+            # Analyze the most recent capture file
+            most_recent = max(cap_files, key=os.path.getmtime)
+            
+            try:
+                if not os.path.exists(most_recent):
+                    QMessageBox.warning(self, "File Not Found", f"Traffic file not found: {most_recent}")
+                    return
+                
+                # Run tshark to extract credentials
+                credentials = []
+                
+                # Look for HTTP POST requests with form data
+                try:
+                    result = subprocess.run(
+                        ['tshark', '-r', most_recent, '-Y', 'http.request.method == POST',
+                         '-T', 'fields', '-e', 'http.host', '-e', 'http.request.uri'],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    
+                    if result.returncode == 0 and result.stdout.strip():
+                        lines = result.stdout.strip().split('\n')
+                        for line in lines[:10]:  # Limit to 10 results
+                            if line.strip():
+                                parts = line.split('\t')
+                                if len(parts) >= 2:
+                                    credentials.append(f"POST: {parts[0]} - {parts[1]}")
+                except Exception:
+                    pass
+                
+                # Look for HTTP Basic Auth
+                try:
+                    result = subprocess.run(
+                        ['tshark', '-r', most_recent, '-Y', 'http.authorization', 
+                         '-T', 'fields', '-e', 'http.host', '-e', 'http.authorization'],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    
+                    if result.returncode == 0 and result.stdout.strip():
+                        lines = result.stdout.strip().split('\n')
+                        for line in lines[:5]:
+                            if line.strip() and 'Basic ' in line:
+                                credentials.append(f"Basic Auth: {line[:80]}...")
+                except Exception:
+                    pass
+                
+                # Show results
+                if credentials:
+                    results_text = f"Found {len(credentials)} potential credential entries:\n\n"
+                    results_text += '\n'.join(credentials[:10])
+                    
+                    QMessageBox.information(self, "Credential Analysis Complete", 
+                        f"Analysis complete for client {mac}\n\n{results_text}")
+                    self.log_update.emit(f"[CLIENT] Found {len(credentials)} potential credentials")
+                else:
+                    QMessageBox.information(self, "No Credentials Found", 
+                        f"No credentials found in traffic for client {mac}\n\nFile: {os.path.basename(most_recent)}")
+                    
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to analyze credentials: {e}")
     
     def open_pcap_folder(self):
         """Open PCAP files folder"""
@@ -3084,25 +3208,156 @@ class WifitexMainWindow(QMainWindow):
             pass  # Silently ignore errors
             
     def closeEvent(self, event):
-        """Handle application close event"""
-        # Save settings before closing
-        self.save_settings()
-        
-        # Stop any running operations and wait for threads to finish
-        self.scanner.stop_scan()
-        self.attack_manager.stop_attack()
-        
-        # Cleanup all attack processes
-        self.attack_manager.cleanup_all_processes()
-        
-        # Give threads time to clean up
-        QApplication.processEvents()
-        
-        # Wait a bit more for threads to finish
-        import time
-        time.sleep(0.1)
-        
-        event.accept()
+        """Handle application close event - comprehensive cleanup to prevent system crashes"""
+        try:
+            # Save settings before closing
+            self.save_settings()
+            
+            # Stop any running operations first
+            if hasattr(self, 'scanner'):
+                self.scanner.stop_scan()
+            if hasattr(self, 'attack_manager'):
+                self.attack_manager.stop_attack()
+            
+            # Give threads time to clean up
+            QApplication.processEvents()
+            
+            # CRITICAL: Comprehensive cleanup to prevent system crashes
+            self._comprehensive_cleanup()
+            
+            # Wait longer for everything to finish
+            import time
+            time.sleep(0.5)
+            
+            QApplication.processEvents()
+            
+            event.accept()
+            
+        except Exception as e:
+            logger.error(f"Error during close: {e}")
+            # Even if there's an error, force cleanup
+            try:
+                self._comprehensive_cleanup()
+            except:
+                pass
+            event.accept()
+    
+    def _comprehensive_cleanup(self):
+        """Comprehensive cleanup to prevent system crashes - kills all processes and restores network"""
+        try:
+            import subprocess
+            import time
+            
+            logger.info("Starting comprehensive cleanup...")
+            
+            # 1. Stop all attacks and threads
+            if hasattr(self, 'attack_manager'):
+                self.attack_manager.stop_attack()
+                self.attack_manager.cleanup_all_processes()
+                self.attack_manager._kill_attack_processes()
+            
+            if hasattr(self, 'scanner'):
+                self.scanner.stop_scan()
+            
+            time.sleep(0.2)
+            
+            # 2. Kill ALL attack processes aggressively (including KARMA-specific ones)
+            processes_to_kill = [
+                'reaver', 'bully', 'aircrack-ng', 'aireplay-ng', 'airodump-ng', 
+                'hostapd', 'dnsmasq', 'wpa_supplicant', 'dhcpcd', 'tshark',
+                'wash', 'pixiewps', 'hcxdumptool', 'hcxpcapngtool', 'hashcat'
+            ]
+            
+            for process in processes_to_kill:
+                try:
+                    # Kill gracefully
+                    subprocess.run(['pkill', '-TERM', '-f', process], 
+                                 capture_output=True, stderr=subprocess.DEVNULL)
+                    time.sleep(0.05)
+                    # Force kill
+                    subprocess.run(['pkill', '-KILL', '-f', process], 
+                                 capture_output=True, stderr=subprocess.DEVNULL)
+                    subprocess.run(['killall', '-9', process], 
+                                 capture_output=True, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            
+            time.sleep(0.2)
+            
+            # 3. Get all interfaces and restore them to managed mode
+            try:
+                # Get list of wireless interfaces
+                result = subprocess.run(['iwconfig'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    interfaces = []
+                    current_interface = None
+                    for line in result.stdout.split('\n'):
+                        if 'IEEE' in line or 'ESSID' in line:
+                            if current_interface:
+                                interfaces.append(current_interface)
+                            current_interface = line.split()[0]
+                    
+                    if current_interface:
+                        interfaces.append(current_interface)
+                    
+                    # Restore each interface to managed mode
+                    for interface in interfaces:
+                        if interface and ' ' not in interface:
+                            try:
+                                # Bring down
+                                subprocess.run(['ip', 'link', 'set', interface, 'down'], 
+                                             capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+                                # Set to managed
+                                subprocess.run(['iw', 'dev', interface, 'set', 'type', 'managed'], 
+                                             capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+                                # Flush IP
+                                subprocess.run(['ip', 'addr', 'flush', 'dev', interface], 
+                                             capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+                                # Bring up
+                                subprocess.run(['ip', 'link', 'set', interface, 'up'], 
+                                             capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+            
+            time.sleep(0.2)
+            
+            # 4. Restart NetworkManager to restore network connectivity
+            try:
+                # Check if NetworkManager is running
+                result = subprocess.run(['systemctl', 'is-active', 'NetworkManager'], 
+                                      capture_output=True, text=True)
+                if 'active' in result.stdout or 'running' in result.stdout:
+                    # Restart NetworkManager to restore network
+                    subprocess.run(['systemctl', 'restart', 'NetworkManager'], 
+                                 capture_output=True, stderr=subprocess.DEVNULL, timeout=5)
+            except Exception:
+                pass
+            
+            time.sleep(0.2)
+            
+            # 5. Unblock rfkill to restore wireless
+            try:
+                subprocess.run(['rfkill', 'unblock', 'all'], 
+                             capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+                subprocess.run(['rfkill', 'unblock', 'wifi'], 
+                             capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+            except Exception:
+                pass
+            
+            logger.info("Comprehensive cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"Error during comprehensive cleanup: {e}")
+            # Try one more time with the most critical cleanup
+            try:
+                subprocess.run(['killall', '-9', 'hostapd', 'dnsmasq', 'airodump-ng'], 
+                             capture_output=True, stderr=subprocess.DEVNULL)
+                subprocess.run(['systemctl', 'restart', 'NetworkManager'], 
+                             capture_output=True, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
 
 
 # Thread classes moved to components.py to avoid duplication
