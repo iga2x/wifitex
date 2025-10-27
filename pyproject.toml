@@ -1,0 +1,124 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wifitex"
+version = "2.7.0"
+description = "Wireless Network Auditor for Linux"
+authors = [
+    {name = "iga2x", email = "mdpoo2@gmail.com"}
+]
+license = {text = "GPL-2.0-only"}
+readme = "README.md"
+requires-python = ">=3.6"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: System :: Networking",
+    "Topic :: System :: Systems Administration",
+]
+keywords = ["wireless", "wifi", "security", "audit", "penetration testing", "aircrack-ng", "wpa", "wep", "wps"]
+
+dependencies = [
+    "psutil>=5.9.6",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+gui = [
+    "PyQt6>=6.6.0",
+    "PyQt6-Qt6>=6.6.0", 
+    "PyQt6-sip>=13.6.0",
+    "psutil>=5.9.6",
+    "requests>=2.31.0",
+    "netifaces>=0.11.0",
+    "watchdog>=3.0.0",
+    "qdarkstyle>=3.2.0",
+    "qtawesome>=1.3.0",
+]
+all = [
+    "PyQt6>=6.6.0",
+    "PyQt6-Qt6>=6.6.0",
+    "PyQt6-sip>=13.6.0", 
+    "psutil>=5.9.6",
+    "requests>=2.31.0",
+    "netifaces>=0.11.0",
+    "watchdog>=3.0.0",
+    "qdarkstyle>=3.2.0",
+    "qtawesome>=1.3.0",
+]
+
+[project.scripts]
+wifitex = "wifitex.__main__:entry_point"
+wifitex-gui = "wifitex.gui.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wifitex*"]
+
+[tool.setuptools.package-data]
+wifitex = ["*.txt", "*.md", "*.png", "*.svg", "*.ico", "*.xpm"]
+
+# Data files for installation
+[tool.setuptools.data-files]
+"share/applications" = ["data/wifitex-gui.desktop"]
+"share/polkit-1/actions" = ["data/wifitex-gui.policy"]
+"share/pixmaps" = [
+    "icons/wifitex-256x256.png",
+    "icons/wifitex-128x128.png", 
+    "icons/wifitex-64x64.png",
+    "icons/wifitex-48x48.png",
+    "icons/wifitex-32x32.png",
+    "icons/wifitex-24x24.png",
+    "icons/wifitex-22x22.png",
+    "icons/wifitex-16x16.png",
+    "icons/wifitex.svg",
+    "icons/wifitex.ico",
+    "icons/wifitex.xpm"
+]
+"share/doc/wifitex" = [
+    "README.md", 
+    "LICENSE", 
+    "GUI_README.md", 
+    "PMKID.md", 
+    "EVILTWIN.md",
+    "TODO.md"
+]
+"share/man/man1" = [
+    "man/wifitex.1", 
+    "man/wifitex-gui.1"
+]
+"share/wifitex" = [
+    "wordlist-top4800-probable.txt"
+]
+
+# Project URLs
+[project.urls]
+"Bug Reports" = "https://github.com/iga2x/wifitex/issues"
+"Source" = "https://github.com/iga2x/wifitex"
+"Documentation" = "https://github.com/iga2x/wifitex/blob/master/README.md"
+"Changelog" = "https://github.com/iga2x/wifitex/blob/master/CHANGELOG.md"
+
+# Pyright/Pylance configuration
+[tool.pyright]
+include = ["wifitex", "tests"]
+exclude = ["**/__pycache__", "**/.*"]
+pythonVersion = "3.8"
+pythonPlatform = "Linux"
+typeCheckingMode = "basic"
+useLibraryCodeForTypes = true
+autoImportCompletions = true
+autoSearchPaths = true
+extraPaths = ["/usr/lib/python3/dist-packages"]
