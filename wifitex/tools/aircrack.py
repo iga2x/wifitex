@@ -168,7 +168,7 @@ class Aircrack(Dependency):
         
         # Add other common wordlists
         additional_wordlists = [
-            './wordlist-top4800-probable.txt',
+            'wifitex/wordlists/wordlist-top4800-probable.txt',
             '/usr/share/dict/wordlist-top4800-probable.txt',
             '/usr/share/wfuzz/wordlist/fuzzdb/wordlists-user-passwd/passwds/phpbb.txt',
             '/usr/share/wordlists/fern-wifi/common.txt'

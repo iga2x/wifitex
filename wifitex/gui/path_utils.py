@@ -82,7 +82,7 @@ def get_project_root() -> Optional[str]:
 @handle_errors(default=None, log_errors=True)
 def get_wordlist_path(filename: str = 'wordlist-top4800-probable.txt') -> Optional[str]:
     """
-    Get the full path to a wordlist file in the project.
+    Get the full path to a wordlist file in the wifitex/wordlists folder.
     
     Args:
         filename: Name of the wordlist file
@@ -90,11 +90,24 @@ def get_wordlist_path(filename: str = 'wordlist-top4800-probable.txt') -> Option
     Returns:
         str: Full path to the wordlist file, or None if not found
     """
-    project_root = get_project_root()
-    if project_root:
-        wordlist_path = os.path.join(project_root, filename)
+    try:
+        # Get the path to wifitex/wordlists folder
+        # The wordlists are in: wifitex/gui -> wifitex -> wifitex/wordlists
+        wifitex_package_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        wifitex_wordlists_dir = os.path.join(wifitex_package_dir, 'wordlists')
+        
+        wordlist_path = os.path.join(wifitex_wordlists_dir, filename)
         if os.path.exists(wordlist_path):
             return wordlist_path
+        
+        # Fallback: Try project root (for development/legacy)
+        project_root = get_project_root()
+        if project_root:
+            fallback_path = os.path.join(project_root, filename)
+            if os.path.exists(fallback_path):
+                return fallback_path
+    except Exception as e:
+        logger.debug(f"Error in get_wordlist_path: {e}")
     
     return None
 
@@ -177,19 +190,14 @@ def find_system_wordlists() -> List[str]:
 @handle_errors(default=[], log_errors=True)
 def get_dynamic_wordlist_paths() -> List[str]:
     """
-    Get all available wordlist paths dynamically.
+    Get all available wordlist paths from system locations (excluding wifitex/wordlists).
     
     Returns:
-        list: List of all found wordlist paths (EXCLUDES wifitex/wordlists folder)
+        list: List of system wordlist paths
     """
     wordlist_paths = []
     
-    # Add project wordlist (legacy single file support)
-    project_wordlist = get_wordlist_path()
-    if project_wordlist:
-        wordlist_paths.append(project_wordlist)
-    
-    # Add system wordlists (NOT including wifitex/wordlists folder)
+    # Add system wordlists only (wifitex/wordlists handled separately in wordlist_manager)
     system_wordlists = find_system_wordlists()
     if system_wordlists:
         wordlist_paths.extend(system_wordlists)

@@ -168,6 +168,15 @@ sudo wifitex-gui
 sudo ./uninstall.sh
 ```
 
+To also remove local build artifacts in this project directory (fresh slate for reinstall), use:
+```bash
+sudo ./uninstall.sh --purge-local
+```
+
+What gets removed:
+- System-wide package, launchers, desktop entries, icons, PolicyKit policy, man pages, app data, site-packages, and caches
+- With `--purge-local`: local `build/`, `dist/`, `*.egg-info`, and all `__pycache__/` in this repo
+
 ## ✨ Advanced Features
 
 ### **Attack Capabilities**

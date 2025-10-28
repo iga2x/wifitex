@@ -50,8 +50,8 @@ class Configuration(object):
         cls.ignore_essid = None # ESSIDs to ignore
         cls.clients_only = False # Only show targets that have associated clients
         cls.five_ghz = True # Scan 5Ghz channels by default
-        cls.six_ghz = True # Scan 6Ghz channels (WiFi 6E) by default
-        cls.seven_ghz = True # Scan 7Ghz channels (future WiFi 7) by default
+        cls.six_ghz = False # Scan 6Ghz channels (WiFi 6E) - not yet supported by airodump-ng
+        cls.seven_ghz = False # Scan 7Ghz channels (future WiFi 7) - not yet supported by airodump-ng
         cls.show_bssids = False # Show BSSIDs in targets list
         cls.random_mac = False # Should generate a random Mac address at startup.
         cls.no_deauth = False # Deauth hidden networks & WPA handshake targets
@@ -140,7 +140,7 @@ class Configuration(object):
         except ImportError:
             # Fallback to original hardcoded paths if GUI module not available
             wordlists = [
-                './wordlist-top4800-probable.txt',  # Local file (ran from cloned repo)
+                'wifitex/wordlists/wordlist-top4800-probable.txt',  # Local file (ran from cloned repo)
                 '/usr/share/dict/wordlist-top4800-probable.txt',  # setup.py with prefix=/usr
                 '/usr/local/share/dict/wordlist-top4800-probable.txt',  # setup.py with prefix=/usr/local
                 # Other passwords found on Kali
@@ -234,7 +234,7 @@ class Configuration(object):
             
             while True:
                 try:
-                    choice = input('{+} {C}Select interface (1-%d): {W}' % len(interfaces)).strip()
+                    choice = input(Color.s('{+} {C}Select interface (1-%d): {W}' % len(interfaces))).strip()
                     if not choice:
                         Color.pl('{!} {R}Please enter a number{W}')
                         continue
@@ -322,7 +322,8 @@ class Configuration(object):
             Color.pl('{+} {C}option:{W} targeting BSSID ' +
                     '{G}%s{W}' % args.target_bssid)
 
-        if args.five_ghz == True:
+        if hasattr(args, 'five_ghz') and args.five_ghz:
+            # If --5ghz flag is explicitly passed, enable it
             cls.five_ghz = True
             Color.pl('{+} {C}option:{W} including {G}5Ghz networks{W} in scans')
 

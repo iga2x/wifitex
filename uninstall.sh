@@ -212,6 +212,36 @@ if command -v gtk-update-icon-cache &> /dev/null; then
 fi
 
 echo ""
+###############################################
+# 12) Optional local project cleanup (repo dir)
+###############################################
+
+# Support non-interactive local purge via flag
+PURGE_LOCAL="false"
+for arg in "${@-}"; do
+  if [ "$arg" = "--purge-local" ]; then
+    PURGE_LOCAL="true"
+  fi
+done
+
+# Detect if we're in a project checkout and optionally remove local build artifacts
+if [ -f "setup.py" ] && [ -d "wifitex" ]; then
+  if [ "$PURGE_LOCAL" = "true" ]; then
+    DO_PURGE="y"
+  else
+    read -p "🧽 Also remove local build artifacts in this folder (build/, dist/, *.egg-info, __pycache__)? (y/N): " -n 1 -r
+    echo
+    DO_PURGE="$REPLY"
+  fi
+
+  if [[ $DO_PURGE =~ ^[Yy]$ ]]; then
+    echo "🧹 Removing local build artifacts..."
+    rm -rf build/ dist/ *.egg-info 2>/dev/null || true
+    find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+    echo "✓ Local artifacts removed (build/, dist/, *.egg-info, __pycache__)"
+  fi
+fi
+
 echo "🎉 Uninstallation completed successfully!"
 echo "========================================="
 echo "✅ All Wifitex components removed:"
@@ -224,6 +254,9 @@ echo "   • Documentation and man pages"
 echo "   • Application data directories"
 echo "   • Python caches and site-packages"
 echo "   • User caches and icon caches"
+if [ -f "setup.py" ] && [ -d "wifitex" ]; then
+  echo "   • Local repo artifacts (if selected)"
+fi
 echo ""
 echo "💡 If you still see icons or menu entries, try logging out and back in."
 echo "🔄 System caches have been refreshed for immediate effect."

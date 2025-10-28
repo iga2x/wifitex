@@ -1,3 +1,0 @@
-[console_scripts]
-wifitex = wifitex.__main__:entry_point
-wifitex-gui = wifitex.gui.__main__:main

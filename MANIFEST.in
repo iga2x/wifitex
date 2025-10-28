@@ -24,8 +24,8 @@ include man/wifitex-gui.1
 include install.py
 include uninstall.py
 
-# Include launcher scripts
-include wifitex-gui wifitex-gui-desktop
+# Note: Launcher scripts (wifitex-gui, wifitex-gui-desktop) are handled by install.sh
+# which creates wifitex-gui-launcher and wifitex-gui during installation
 
 # Include test files
 include test_gui.py

@@ -40,6 +40,10 @@ from .components import (
     NetworkScanner, AttackManager, SettingsPanel, LogViewer,
     ProgressIndicator, StatusDisplay, ToolManager, DependencyWarningDialog, ToolInstallationDialog
 )
+from . import components as gui_components
+from typing import Any, cast
+# Make linter aware of dynamically added dialog in components
+CleanupProgressDialog = cast(Any, gui_components).CleanupProgressDialog
 from .utils import SystemUtils, NetworkUtils, ConfigManager
 from .error_handler import handle_errors, ConfigurationError
 from .logger import get_logger
@@ -223,15 +227,11 @@ class WifitexMainWindow(QMainWindow):
         # Scan options
         scan_layout.addWidget(QLabel("Channel:"), 1, 0)
         self.channel_spin = QSpinBox()
-        self.channel_spin.setRange(0, 165)  # 0 = All channels, 1-165 = specific channels
+        self.channel_spin.setRange(0, 233)  # 0 = All channels, extended range for 6GHz/7GHz
         self.channel_spin.setValue(0)  # Default to "All channels"
         self.channel_spin.setSpecialValueText("Auto (All)")
-        self.channel_spin.setToolTip("0 = Auto scan all channels (2.4GHz + 5GHz)\n1-14 = 2.4GHz channels\n36+ = 5GHz channels")
+        self.channel_spin.setToolTip("0 = Auto scan all channels (2.4GHz + 5GHz + 6GHz/6E + 7GHz)\n1-14 = 2.4GHz channels\n36+ = 5GHz channels\n6GHz channels supported when available")
         scan_layout.addWidget(self.channel_spin, 1, 1)
-        
-        self.five_ghz_cb = QCheckBox("5GHz Only")
-        self.five_ghz_cb.setToolTip("When checked, scan only 5GHz channels. When unchecked with Channel=0, scan all channels.")
-        scan_layout.addWidget(self.five_ghz_cb, 2, 0, 1, 2)
         
         layout.addWidget(scan_group)
         
@@ -274,7 +274,7 @@ class WifitexMainWindow(QMainWindow):
         self.attack_type_combo = QComboBox()
         self.attack_type_combo.addItems([
             "Auto (Recommended)", "WPS Pixie-Dust", "WPS PIN", 
-            "WPA/WPA2 Handshake", "PMKID", "KARMA Attack"
+            "WPA/WPA2 Handshake", "PMKID"
         ])
         attack_type_layout.addWidget(self.attack_type_combo)
         attack_layout.addLayout(attack_type_layout)
@@ -286,44 +286,10 @@ class WifitexMainWindow(QMainWindow):
         self.deauth_cb.setChecked(True)
         options_layout.addWidget(self.deauth_cb, 0, 0)
         
-        self.random_mac_cb = QCheckBox("Random MAC Address")
-        options_layout.addWidget(self.random_mac_cb, 0, 1)
-        
         self.crack_cb = QCheckBox("Auto-crack with wordlist")
-        options_layout.addWidget(self.crack_cb, 1, 0)
+        options_layout.addWidget(self.crack_cb, 0, 1)
         
-        # KARMA-specific options (initially hidden)
-        self.karma_options_group = QGroupBox("KARMA Attack Options")
-        self.karma_options_layout = QGridLayout(self.karma_options_group)
-        
-        self.karma_options_layout.addWidget(QLabel("Probe Timeout (sec):"), 0, 0)
-        self.karma_probe_timeout_spin = QSpinBox()
-        self.karma_probe_timeout_spin.setRange(10, 300)
-        self.karma_probe_timeout_spin.setValue(30)
-        self.karma_options_layout.addWidget(self.karma_probe_timeout_spin, 0, 1)
-        
-        self.karma_options_layout.addWidget(QLabel("Min Probes:"), 0, 2)
-        self.karma_min_probes_spin = QSpinBox()
-        self.karma_min_probes_spin.setRange(1, 20)
-        self.karma_min_probes_spin.setValue(1)  # Changed from 3 to 1 to match GUI display
-        self.karma_options_layout.addWidget(self.karma_min_probes_spin, 0, 3)
-        
-        self.karma_all_channels_cb = QCheckBox("Capture from all channels")
-        self.karma_options_layout.addWidget(self.karma_all_channels_cb, 1, 0, 1, 2)
-        
-        self.karma_handshake_capture_cb = QCheckBox("Enable Handshake Capture")
-        self.karma_handshake_capture_cb.setChecked(True)  # Default enabled
-        self.karma_options_layout.addWidget(self.karma_handshake_capture_cb, 1, 2, 1, 1)
-        
-        self.karma_handshake_cracking_cb = QCheckBox("Enable Handshake Cracking")
-        self.karma_handshake_cracking_cb.setChecked(False)  # Default disabled
-        self.karma_options_layout.addWidget(self.karma_handshake_cracking_cb, 1, 3, 1, 1)
-        
-        self.karma_options_group.setVisible(False)
-        options_layout.addWidget(self.karma_options_group, 2, 0, 1, 4)
-        
-        # Connect attack type change to show/hide KARMA options
-        self.attack_type_combo.currentTextChanged.connect(self.on_attack_type_changed)
+        # KARMA options are configured in Settings tab; no per-attack KARMA UI here
         
         attack_layout.addLayout(options_layout)
         
@@ -913,7 +879,7 @@ class WifitexMainWindow(QMainWindow):
             self.scanner.start_scan(
                 interface,
                 channel_value if channel_value > 0 else None,
-                self.five_ghz_cb.isChecked(),
+                True,  # Always scan all bands (2.4GHz, 5GHz, 6GHz if supported)
                 scan_timeout
             )
             
@@ -1275,7 +1241,6 @@ class WifitexMainWindow(QMainWindow):
         """Get current attack options - consolidated method to avoid duplication"""
         return {
             'deauth': self.deauth_cb.isChecked(),
-            'random_mac': self.random_mac_cb.isChecked(),
             'crack': self.crack_cb.isChecked(),
             'interface': self._get_current_interface(),
             'wpa_timeout': self.settings_panel.wpa_timeout_spin.value(),
@@ -1296,12 +1261,7 @@ class WifitexMainWindow(QMainWindow):
             'brute_force_mode': self.settings_panel.brute_mode_combo.currentIndex(),
             'brute_force_mask': self.settings_panel.mask_combo.currentText() == "Custom Pattern" and self.settings_panel.custom_mask_edit.text() or self.settings_panel.mask_patterns.get(self.settings_panel.mask_combo.currentText(), "?d?d?d?d?d?d"),
             'brute_force_timeout': self.settings_panel.brute_timeout_spin.value() * 60,  # Convert minutes to seconds
-            # KARMA Attack specific options
-            'karma_probe_timeout': self.karma_probe_timeout_spin.value(),
-            'karma_min_probes': self.karma_min_probes_spin.value(),
-            'karma_all_channels': self.karma_all_channels_cb.isChecked(),
-            'karma_handshake_capture': self.karma_handshake_capture_cb.isChecked(),
-            'karma_handshake_cracking': self.karma_handshake_cracking_cb.isChecked(),
+            # KARMA Attack options come from Settings panel only
             'karma_dns_spoofing': self.settings_panel.karma_dns_spoofing_cb.isChecked()
         }
         
@@ -1392,10 +1352,10 @@ class WifitexMainWindow(QMainWindow):
     def on_attack_type_changed(self, attack_type):
         """Handle attack type selection change"""
         if attack_type == "KARMA Attack":
-            self.karma_options_group.setVisible(True)
-            self.log_update.emit("KARMA Attack selected - Enhanced Evil Twin with PNL capture")
+            # KARMA per-attack options are managed in Settings only
+            self.log_update.emit("KARMA Attack selected - configure options in Settings tab")
         else:
-            self.karma_options_group.setVisible(False)
+            pass
         
     def on_attack_progress(self, progress_data):
         """Handle attack progress updates"""
@@ -2527,7 +2487,6 @@ class WifitexMainWindow(QMainWindow):
                     'current_attacks': self.current_attacks,
                     'interface': self.interface_combo.currentText(),
                     'channel': self.channel_spin.value(),
-                    'five_ghz': self.five_ghz_cb.isChecked(),
                     'settings': {
                         'scan_timeout': self.settings_panel.scan_timeout_spin.value(),
                         'wpa_timeout': self.settings_panel.wpa_timeout_spin.value(),
@@ -2574,11 +2533,9 @@ class WifitexMainWindow(QMainWindow):
                     if index >= 0:
                         self.interface_combo.setCurrentIndex(index)
                 
-                # Restore channel and band settings
+                # Restore channel settings
                 if 'channel' in session_data:
                     self.channel_spin.setValue(session_data['channel'])
-                if 'five_ghz' in session_data:
-                    self.five_ghz_cb.setChecked(session_data['five_ghz'])
                 
                 # Restore settings panel values
                 if 'settings' in session_data:
@@ -2629,7 +2586,7 @@ class WifitexMainWindow(QMainWindow):
                         'wifitex_version': '2.0.0',
                         'interface': self.interface_combo.currentText(),
                         'channel': self.channel_spin.value(),
-                        'five_ghz_enabled': self.five_ghz_cb.isChecked()
+                        'five_ghz_enabled': True  # Always enabled
                     },
                     'networks': self.networks,
                     'selected_networks': self.selected_networks,
@@ -2690,7 +2647,7 @@ class WifitexMainWindow(QMainWindow):
                         f.write(f"Export Date: {export_data['export_info']['timestamp']}\n")
                         f.write(f"Interface: {export_data['export_info']['interface']}\n")
                         f.write(f"Channel: {export_data['export_info']['channel']}\n")
-                        f.write(f"5GHz Enabled: {export_data['export_info']['five_ghz_enabled']}\n\n")
+                        f.write(f"Band Scanning: All Bands (2.4GHz, 5GHz, 6GHz if supported)\n\n")
                         
                         f.write("PERFORMANCE METRICS\n")
                         f.write("-" * 20 + "\n")
@@ -2764,7 +2721,6 @@ class WifitexMainWindow(QMainWindow):
 <li><b>WPS PIN Attack:</b> Online brute-force against WPS PIN authentication</li>
 <li><b>WPA Handshake Capture:</b> 4-way handshake capture and offline cracking</li>
 <li><b>PMKID Hash Capture:</b> Modern hash extraction without client interaction</li>
-<li><b>KARMA Attack:</b> Enhanced Evil Twin with PNL capture</li>
 </ul>
 
 <p><b>Built with PyQt6</b> for a professional user experience.</p>
@@ -2832,13 +2788,6 @@ class WifitexMainWindow(QMainWindow):
 <li><b>Handshake Capture:</b> Capture 4-way handshake</li>
 <li><b>PMKID Capture:</b> Modern hash extraction</li>
 <li>Select target and click "Attack WPA"</li>
-</ul>
-
-<p><b>KARMA Attack:</b></p>
-<ul>
-<li><b>Enhanced Evil Twin:</b> Creates rogue AP</li>
-<li><b>PNL Capture:</b> Captures preferred network lists</li>
-<li>Configure probe timeout and interfaces</li>
 </ul>
 
 <h3>Troubleshooting</h3>
@@ -3066,9 +3015,6 @@ class WifitexMainWindow(QMainWindow):
                 if 0 <= channel_val <= 165:
                     self.channel_spin.setValue(channel_val)
                 
-            if 'five_ghz' in settings:
-                self.five_ghz_cb.setChecked(settings['five_ghz'])
-                
         except Exception as e:
             self.log_update.emit(f"Error loading settings: {str(e)}")
             
@@ -3079,9 +3025,7 @@ class WifitexMainWindow(QMainWindow):
             main_settings = {
                 'interface': self._get_current_interface(),
                 'channel': self.channel_spin.value(),
-                'five_ghz': self.five_ghz_cb.isChecked(),
                 'deauth': self.deauth_cb.isChecked(),
-                'random_mac': self.random_mac_cb.isChecked(),
                 'crack': self.crack_cb.isChecked()
             }
             
@@ -3220,27 +3164,35 @@ class WifitexMainWindow(QMainWindow):
             if hasattr(self, 'attack_manager'):
                 self.attack_manager.stop_attack()
             
-            # Give threads time to clean up
+            # Show cleanup progress dialog
+            cleanup_dialog = CleanupProgressDialog(self)
+            
+            # Force dialog to render immediately to prevent black screen
+            cleanup_dialog.show()
+            QApplication.processEvents()
+            cleanup_dialog.raise_()
+            QApplication.processEvents()
+            cleanup_dialog.activateWindow()
             QApplication.processEvents()
             
-            # CRITICAL: Comprehensive cleanup to prevent system crashes
-            self._comprehensive_cleanup()
-            
-            # Wait longer for everything to finish
-            import time
-            time.sleep(0.5)
-            
+            # Add initial log message
+            cleanup_dialog.add_log("Preparing cleanup...")
             QApplication.processEvents()
+            
+            # Run cleanup in a background thread
+            self._cleanup_worker = CleanupWorker(self)
+            self._cleanup_worker.progress.connect(cleanup_dialog.add_log)
+            self._cleanup_worker.error.connect(lambda m: cleanup_dialog.add_log(f"⚠️ {m}"))
+            self._cleanup_worker.finished.connect(lambda: (cleanup_dialog.set_done(), QTimer.singleShot(250, cleanup_dialog.accept)))
+            self._cleanup_worker.start()
+            
+            # Block with dialog event loop while UI remains responsive
+            cleanup_dialog.exec()
             
             event.accept()
             
         except Exception as e:
             logger.error(f"Error during close: {e}")
-            # Even if there's an error, force cleanup
-            try:
-                self._comprehensive_cleanup()
-            except:
-                pass
             event.accept()
     
     def _comprehensive_cleanup(self):
@@ -3361,6 +3313,109 @@ class WifitexMainWindow(QMainWindow):
                 pass
 
 
+# Run cleanup in background to keep UI responsive
+class CleanupWorker(QThread):
+    """Run cleanup in background thread and report progress safely via signals"""
+    progress = pyqtSignal(str)
+    error = pyqtSignal(str)
+    def __init__(self, main_window: 'WifitexMainWindow'):
+        super().__init__()
+        self._mw = main_window
+    
+    def _log(self, msg: str):
+        try:
+            self.progress.emit(msg)
+        except Exception:
+            pass
+    
+    def run(self):
+        try:
+            self._run_cleanup_core()
+        except Exception as e:
+            self.error.emit(f"Cleanup error: {str(e)}")
+
+    def _run_cleanup_core(self):
+        import subprocess
+        import time
+        self._log("Starting comprehensive cleanup...")
+        # 1. Stop attacks and scanner
+        if hasattr(self._mw, 'attack_manager'):
+            self._log("Stopping attacks...")
+            try:
+                self._mw.attack_manager.stop_attack()
+                self._mw.attack_manager.cleanup_all_processes()
+                self._mw.attack_manager._kill_attack_processes()
+            except Exception:
+                pass
+        if hasattr(self._mw, 'scanner'):
+            self._log("Stopping scanner...")
+            try:
+                self._mw.scanner.stop_scan()
+            except Exception:
+                pass
+        time.sleep(0.1)
+        # 2. Kill known processes
+        self._log("Terminating attack processes...")
+        processes_to_kill = [
+            'reaver', 'bully', 'aircrack-ng', 'aireplay-ng', 'airodump-ng',
+            'hostapd', 'dnsmasq', 'wpa_supplicant', 'dhcpcd', 'tshark',
+            'wash', 'pixiewps', 'hcxdumptool', 'hcxpcapngtool', 'hashcat'
+        ]
+        for proc in processes_to_kill:
+            try:
+                subprocess.run(['pkill', '-TERM', '-f', proc], capture_output=True, stderr=subprocess.DEVNULL)
+                time.sleep(0.03)
+                subprocess.run(['pkill', '-KILL', '-f', proc], capture_output=True, stderr=subprocess.DEVNULL)
+                subprocess.run(['killall', '-9', proc], capture_output=True, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        time.sleep(0.1)
+        # 3. Restore interfaces
+        self._log("Restoring network interfaces...")
+        try:
+            result = subprocess.run(['iwconfig'], capture_output=True, text=True)
+            if result.returncode == 0:
+                interfaces = []
+                current = None
+                for line in result.stdout.split('\n'):
+                    if 'IEEE' in line or 'ESSID' in line:
+                        if current:
+                            interfaces.append(current)
+                        current = line.split()[0]
+                if current:
+                    interfaces.append(current)
+                for iface in interfaces:
+                    if iface and ' ' not in iface:
+                        try:
+                            subprocess.run(['ip', 'link', 'set', iface, 'down'], capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+                            subprocess.run(['iw', 'dev', iface, 'set', 'type', 'managed'], capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+                            subprocess.run(['ip', 'addr', 'flush', 'dev', iface], capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+                            subprocess.run(['ip', 'link', 'set', iface, 'up'], capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+                            self._log(f"✓ Restored {iface} to managed mode")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        time.sleep(0.1)
+        # 4. Restart NetworkManager
+        self._log("Restarting NetworkManager...")
+        try:
+            result = subprocess.run(['systemctl', 'is-active', 'NetworkManager'], capture_output=True, text=True)
+            if 'active' in result.stdout or 'running' in result.stdout:
+                subprocess.run(['systemctl', 'restart', 'NetworkManager'], capture_output=True, stderr=subprocess.DEVNULL, timeout=5)
+                self._log("✓ NetworkManager restarted")
+        except Exception:
+            pass
+        time.sleep(0.1)
+        # 5. rfkill unblock
+        self._log("Restoring wireless...")
+        try:
+            subprocess.run(['rfkill', 'unblock', 'all'], capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+            subprocess.run(['rfkill', 'unblock', 'wifi'], capture_output=True, stderr=subprocess.DEVNULL, timeout=2)
+            self._log("✓ Wireless restored")
+        except Exception:
+            pass
+        self._log("✓ Cleanup completed successfully")
 # Thread classes moved to components.py to avoid duplication
 
 

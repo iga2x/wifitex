@@ -93,20 +93,27 @@ class Airodump(Dependency):
         ]
         if self.channel:
             command.extend(['-c', str(self.channel)])
-        # When no specific channel, scan all supported bands
-        # airodump-ng by default scans 2.4GHz and 5GHz, we add 6GHz/7GHz if enabled
-        if not self.channel:
-            # Check if we need to add specific bands
-            # Default behavior scans 2.4GHz + 5GHz
-            # Add 6GHz and 7GHz bands if enabled and supported
-            bands_to_scan = []
-            if self.five_ghz: bands_to_scan.append('a')  # 5GHz
-            if self.six_ghz: bands_to_scan.append('6a')  # 6GHz (WiFi 6E)
-            if self.seven_ghz: bands_to_scan.append('6e')  # 7GHz (future WiFi 7)
+        else:
+            # When no specific channel, configure band scanning
+            # airodump-ng by default scans 2.4GHz (bg) and 5GHz (a) if supported by driver
+            # We need to explicitly add --band flag to ensure 5GHz is scanned
+            # Build band specification based on enabled bands
+            # Note: airodump-ng supports: a (5GHz), b (2.4GHz 11b), g (2.4GHz 11g)
+            # The --band flag can take: a, b, g, or combinations like abg
+            bands = []
             
-            # If all bands enabled, scan all (airodump default behavior)
-            # If specific bands, we let airodump scan all bands by default
-            # (airodump-ng supports automatic band detection)
+            # Always include 2.4GHz bands (b and g)
+            bands.append('bg')
+            
+            # Add 5GHz (a) if enabled
+            if self.five_ghz:
+                bands.append('a')
+            
+            # Combine all enabled bands
+            band_string = ''.join(sorted(set(''.join(bands))))
+            
+            # Add the --band flag with appropriate bands
+            command.extend(['--band', band_string])
 
         if self.encryption:   command.extend(['--enc', self.encryption])
         if self.wps:          command.extend(['--wps'])
@@ -363,11 +370,24 @@ class Airodump(Dependency):
             # If encryption_filter is empty, show all targets
             if not Configuration.encryption_filter:
                 result.append(target)
-            elif 'WPA' in Configuration.encryption_filter and 'WPA' in target.encryption:
-                result.append(target)
-            elif 'WPS' in Configuration.encryption_filter and target.wps in [WPSState.UNLOCKED, WPSState.LOCKED]:
-                result.append(target)
-            elif skip_wps:
+                continue
+            
+            # Check if target matches any encryption filter criteria
+            matches_filter = False
+            
+            # Check WPA filter
+            if 'WPA' in Configuration.encryption_filter and 'WPA' in target.encryption:
+                matches_filter = True
+            
+            # Check WPS filter (targets with detected WPS)
+            if 'WPS' in Configuration.encryption_filter and target.wps in [WPSState.UNLOCKED, WPSState.LOCKED]:
+                matches_filter = True
+            
+            # If skip_wps is True, allow all targets (skip filtering)
+            if skip_wps:
+                matches_filter = True
+            
+            if matches_filter:
                 result.append(target)
 
         # Filter based on BSSID/ESSID

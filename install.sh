@@ -307,7 +307,7 @@ if [ -f "data/wifitex-gui.desktop" ]; then
     # Update desktop file to use launcher and theme icon
     if [ -f "$DESKTOP_APPS_DIR/wifitex-gui.desktop" ]; then
         # Use theme icon for proper desktop integration
-        sed -i "s|Exec=.*|Exec=pkexec $BIN_DIR/wifitex-gui-launcher|g" "$DESKTOP_APPS_DIR/wifitex-gui.desktop"
+        sed -i "s|Exec=.*|Exec=$BIN_DIR/wifitex-gui-launcher|g" "$DESKTOP_APPS_DIR/wifitex-gui.desktop"
         sed -i "s|TryExec=.*|TryExec=$BIN_DIR/wifitex-gui-launcher|g" "$DESKTOP_APPS_DIR/wifitex-gui.desktop"
         sed -i "s|Icon=.*|Icon=wifitex-256x256|g" "$DESKTOP_APPS_DIR/wifitex-gui.desktop"
         
@@ -481,9 +481,6 @@ exec /usr/local/bin/wifitex-gui-launcher "$@"
 EOF
 
 chmod +x "$BIN_DIR/wifitex-gui"
-
-# Update desktop file to use launcher
-sed -i "s|Exec=pkexec /usr/local/bin/wifitex-gui-launcher|Exec=/usr/local/bin/wifitex-gui-launcher|g" "$DESKTOP_APPS_DIR/wifitex-gui.desktop"
 
 echo ""
 echo "🎉 Installation completed successfully!"

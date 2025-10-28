@@ -77,7 +77,10 @@ setup(
     },
     
     # Scripts
-    scripts=['bin/wifitex', 'wifitex-gui', 'wifitex-gui-desktop'],
+    # Note: bin/wifitex is kept for development use
+    # wifitex-gui and wifitex-gui-desktop are handled by install.sh script
+    # which creates wifitex-gui-launcher and wifitex-gui at install time
+    scripts=['bin/wifitex'],
     
     # Data files
     data_files=[

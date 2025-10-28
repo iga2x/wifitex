@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QProgressBar, QTextEdit, QListWidget,
     QListWidgetItem, QGroupBox, QFrame, QScrollArea, QComboBox,
     QSpinBox, QCheckBox, QFileDialog, QDialog, QDialogButtonBox,
-    QMessageBox, QTabWidget, QTextBrowser, QLineEdit
+    QMessageBox, QTabWidget, QTextBrowser, QLineEdit, QApplication
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation,
@@ -829,6 +829,30 @@ class SettingsPanel(QWidget):
         self.multi_wordlist_cb.setToolTip("Try multiple wordlists in sequence for better success rate")
         cracking_layout.addWidget(self.multi_wordlist_cb)
         
+        # Custom wordlist folder selection
+        self.custom_wordlist_enabled_cb = QCheckBox("Enable Custom Wordlist Folder")
+        self.custom_wordlist_enabled_cb.setChecked(False)
+        self.custom_wordlist_enabled_cb.setToolTip("Add additional wordlists from a custom folder")
+        cracking_layout.addWidget(self.custom_wordlist_enabled_cb)
+        
+        # Custom folder path selection
+        custom_folder_layout = QHBoxLayout()
+        self.custom_wordlist_path_label = QLabel("Custom Folder: Not selected")
+        self.custom_wordlist_path_label.setStyleSheet("color: #888")
+        custom_folder_layout.addWidget(self.custom_wordlist_path_label)
+        
+        self.browse_wordlist_btn = QPushButton("Browse...")
+        self.browse_wordlist_btn.clicked.connect(self._browse_wordlist_folder)
+        self.browse_wordlist_btn.setEnabled(False)
+        custom_folder_layout.addWidget(self.browse_wordlist_btn)
+        cracking_layout.addLayout(custom_folder_layout)
+        
+        # Connect checkbox to enable/disable browse button
+        self.custom_wordlist_enabled_cb.toggled.connect(self._on_custom_wordlist_toggled)
+        
+        # Store custom wordlist paths
+        self.custom_wordlist_paths = []
+        
         # Cracking tools
         cracking_layout.addWidget(QLabel("Cracking Tools:"))
         self.aircrack_cb = QCheckBox("Aircrack-ng")
@@ -1360,9 +1384,8 @@ class SettingsPanel(QWidget):
             self.gpu_info_label.setStyleSheet("color: #888")
     
     def _populate_wordlist_combo(self):
-        """Populate the wordlist combo box with available wordlists"""
+        """Populate the wordlist combo box with available wordlists from wifitex/wordlists only"""
         try:
-            from .wordlist_manager import wordlist_manager
             import os
             
             # Get wifitex package directory to identify default wordlists
@@ -1371,34 +1394,28 @@ class SettingsPanel(QWidget):
             wifitex_package_dir = os.path.dirname(os.path.dirname(__file__))
             wifitex_wordlists_dir = os.path.join(wifitex_package_dir, 'wordlists')
             
-            # Get all wordlists
-            all_wordlists = wordlist_manager.get_all_wordlists()
+            # Clear existing items
+            self.wordlist_combo.clear()
             
-            # Separate wordlists into default (wifitex/wordlists) and extra (system)
-            default_wordlists = []
-            extra_wordlists = []
+            # ONLY scan wifitex/wordlists folder (no system-wide scanning)
+            if os.path.exists(wifitex_wordlists_dir) and os.path.isdir(wifitex_wordlists_dir):
+                # Scan all .txt, .lst, .gz files in wifitex/wordlists folder
+                for root, dirs, files in os.walk(wifitex_wordlists_dir):
+                    for file in files:
+                        if any(ext in file.lower() for ext in ['.txt', '.lst', '.gz']):
+                            wordlist_path = os.path.join(root, file)
+                            display_name = f"📁 {file}"
+                            self.wordlist_combo.addItem(display_name, wordlist_path)
             
-            for path, info in all_wordlists.items():
-                # Check if this is a default wordlist from wifitex/wordlists folder
-                is_default = wifitex_wordlists_dir and path.startswith(wifitex_wordlists_dir)
-                
-                if is_default:
-                    default_wordlists.append((path, info))
-                else:
-                    extra_wordlists.append((path, info))
-            
-            # First, add default wordlists (from wifitex/wordlists)
-            if default_wordlists:
-                # Add default wordlists with clear label
-                for path, info in default_wordlists:
-                    display_name = f"📁 {info['name']}"
-                    self.wordlist_combo.addItem(display_name, path)
-            
-            # Then, add extra/system wordlists
-            if extra_wordlists:
-                for path, info in extra_wordlists:
-                    display_name = f"⚙️ {info['name']}"
-                    self.wordlist_combo.addItem(display_name, path)
+            # Add custom wordlist paths if enabled
+            if (hasattr(self, 'custom_wordlist_enabled_cb') and 
+                hasattr(self, 'custom_wordlist_paths') and
+                self.custom_wordlist_enabled_cb.isChecked() and 
+                self.custom_wordlist_paths):
+                for wordlist_path in self.custom_wordlist_paths:
+                    if os.path.exists(wordlist_path):
+                        display_name = f"🗂️ {os.path.basename(wordlist_path)}"
+                        self.wordlist_combo.addItem(display_name, wordlist_path)
                 
         except Exception as e:
             logger.error(f"Error populating wordlist combo: {e}")
@@ -1415,6 +1432,73 @@ class SettingsPanel(QWidget):
                 # Ultimate fallback - log the error but continue
                 logger.warning(f"Warning: Failed to load wordlist from path_utils: {e}")
                 self.wordlist_combo.addItem("wordlist-top4800-probable.txt", "wordlist-top4800-probable.txt")
+    
+    def _on_custom_wordlist_toggled(self, checked):
+        """Handle custom wordlist checkbox toggle"""
+        self.browse_wordlist_btn.setEnabled(checked)
+        if not checked:
+            # Clear custom paths when disabled
+            self.custom_wordlist_paths = []
+            self.custom_wordlist_path_label.setText("Custom Folder: Not selected")
+            self.custom_wordlist_path_label.setStyleSheet("color: #888")
+            # Repopulate combo to remove custom wordlists
+            self._populate_wordlist_combo()
+    
+    def _browse_wordlist_folder(self):
+        """Browse for a custom wordlist folder"""
+        from PyQt6.QtWidgets import QFileDialog
+        import os
+        
+        # Get the starting directory (home or current working directory)
+        start_dir = os.path.expanduser("~")
+        
+        # Open folder selection dialog
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Wordlist Folder",
+            start_dir,
+            QFileDialog.Option.ShowDirsOnly
+        )
+        
+        if folder_path:
+            # Scan the folder for .txt, .lst, .gz files
+            self.custom_wordlist_paths = []
+            for root, dirs, files in os.walk(folder_path):
+                for file in files:
+                    if any(ext in file.lower() for ext in ['.txt', '.lst', '.gz']):
+                        wordlist_path = os.path.join(root, file)
+                        self.custom_wordlist_paths.append(wordlist_path)
+            
+            # Update label
+            if self.custom_wordlist_paths:
+                self.custom_wordlist_path_label.setText(
+                    f"Custom Folder: {os.path.basename(folder_path)} ({len(self.custom_wordlist_paths)} wordlists found)"
+                )
+                self.custom_wordlist_path_label.setStyleSheet("color: #51cf66")
+                # Repopulate combo to add custom accessed
+                self._populate_wordlist_combo()
+            else:
+                self.custom_wordlist_path_label.setText(f"Custom Folder: {os.path.basename(folder_path)} (No wordlists found)")
+                self.custom_wordlist_path_label.setStyleSheet("color: #ffa94d")
+    
+    def get_all_wordlist_paths(self):
+        """Get all wordlist paths (from wifitex/wordlists and custom folder if enabled)"""
+        wordlist_paths = []
+        
+        # Get primary wordlist
+        primary_path = self.wordlist_combo.currentData()
+        if primary_path:
+            wordlist_paths.append(primary_path)
+        
+        # If multi-wordlist is enabled, get all paths
+        if self.multi_wordlist_cb.isChecked():
+            # Get all items from combo (excluding already added primary)
+            for i in range(self.wordlist_combo.count()):
+                path = self.wordlist_combo.itemData(i)
+                if path and path != primary_path:
+                    wordlist_paths.append(path)
+        
+        return wordlist_paths
 
 
 class LogViewer(QWidget):
@@ -2044,7 +2128,7 @@ class UnifiedScanWorker(QThread):
                 
             if 'Mode:Monitor' not in result.stdout:
                 self.scan_progress.emit({
-                    'message': f'❌ Interface {self.interface} not in monitor mode!',
+                    'message': f'❌ Interface {self.interface} not in monitor mode!\n\nPlease:\n1. Click "Enable Monitor Mode" button\n2. Or run: sudo airmon-ng start {self.interface}',
                     'progress': 0
                 })
                 self.scan_completed.emit([])
@@ -2082,12 +2166,20 @@ class UnifiedScanWorker(QThread):
                         # Get stderr output from the Process object's stderr() method
                         stderr_output = self.airodump.pid.stderr()
                         if stderr_output and stderr_output.strip():
-                            raise Exception(f"airodump-ng failed: {stderr_output.strip()}")
-                    except Exception:
-                        pass
-                raise Exception("airodump-ng process failed to start or died immediately")
+                            error_msg = f"airodump-ng failed: {stderr_output.strip()}"
+                            logger.error(f"[SCAN] {error_msg}")
+                            raise Exception(error_msg)
+                    except Exception as e:
+                        logger.error(f"[SCAN] Failed to get airodump stderr: {e}")
+                        raise Exception("airodump-ng process failed to start or died immediately")
+                else:
+                    raise Exception("airodump-ng process failed to start - no PID created")
             
             logger.info(f"[SCAN] Airodump process started with PID: {self.airodump.pid.pid}")
+            
+            # Give airodump a moment to initialize and create initial CSV file
+            import time
+            time.sleep(2)
             
             # Scan loop - exact same logic as CLI scanner
             scan_iterations = 0
@@ -2095,16 +2187,25 @@ class UnifiedScanWorker(QThread):
             
             while self.running:
                 if self.airodump.pid.poll() is not None:
+                    # Airodump process died - check for CSV files one last time before breaking
+                    logger.warning(f"[SCAN] Airodump process died, checking for CSV files...")
+                    self.targets = self.airodump.get_targets(old_targets=self.targets, apply_filter=True)
+                    csv_files = self.airodump.find_files(endswith='.csv')
+                    if csv_files:
+                        logger.debug(f"[SCAN] Found CSV files: {csv_files}")
+                    else:
+                        logger.error(f"[SCAN] No CSV files found - airodump may have failed to start")
+                        self.scan_progress.emit({'message': '❌ Airodump process failed - no networks detected'})
                     break
                 
                 # Get targets using the same method as CLI scanner
                 self.targets = self.airodump.get_targets(old_targets=self.targets, apply_filter=True)
                 
-                # Debug: Check if CSV files exist
+                # Debug: Check if CSV files exist (but skip warning on first iteration to avoid spam)
                 csv_files = self.airodump.find_files(endswith='.csv')
                 if csv_files:
                     logger.debug(f"[SCAN] Found CSV files: {csv_files}")
-                else:
+                elif scan_iterations > 0:  # Only warn after first iteration
                     logger.warning(f"[SCAN] No CSV files found after {scan_iterations} iterations")
                 
                 # Update decloaked status (same as CLI)
@@ -4809,3 +4910,95 @@ class AttackWorker(QThread):
         except Exception:
             # Ignore all errors during destruction
             pass
+
+
+class CleanupProgressDialog(QDialog):
+    """Dialog showing cleanup progress during application shutdown"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Cleaning Up...")
+        self.setModal(True)
+        self.resize(500, 300)
+        
+        # Apply dark theme styling immediately to prevent black screen
+        from .styles import DarkTheme
+        self.setStyleSheet(DarkTheme.get_stylesheet())
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        """Setup the dialog UI"""
+        layout = QVBoxLayout(self)
+        
+        # Title
+        title = QLabel("Cleaning up and shutting down...")
+        title.setFont(QFont("", 12, weight=QFont.Weight.Bold))
+        layout.addWidget(title)
+        
+        # Progress text area
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setFont(QFont("Courier", 9))
+        layout.addWidget(self.log_text)
+        
+        # Progress bar (optional, hidden by default)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # Indeterminate
+        self.progress_bar.hide()
+        layout.addWidget(self.progress_bar)
+        
+        # Force immediate rendering to prevent black screen
+        QApplication.processEvents()
+    
+    def add_log(self, message: str):
+        """Add a log message to the text area"""
+        self.log_text.append(message)
+        # Auto-scroll to bottom
+        self.log_text.moveCursor(QTextCursor.MoveOperation.End)
+    
+    def set_done(self):
+        """Mark cleanup as done"""
+        self.add_log("✓ Cleanup complete!")
+    
+    def show_progress(self):
+        """Show progress bar"""
+        self.progress_bar.show()
+    
+    def hide_progress(self):
+        """Hide progress bar"""
+        self.progress_bar.hide()
+
+
+class CleanupWorker(QThread):
+    """Worker thread for performing cleanup operations"""
+    
+    progress = pyqtSignal(str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal()
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.main_window: Optional[Any] = parent  # Type: Any to avoid type checking issues with dynamic attributes
+        self.running = True
+    
+    def run(self):
+        """Execute cleanup operations"""
+        try:
+            self.progress.emit("Stopping all processes...")
+            time.sleep(0.2)
+            
+            # Call the main window's comprehensive cleanup
+            if self.main_window and hasattr(self.main_window, '_comprehensive_cleanup'):
+                self.main_window._comprehensive_cleanup()  # type: ignore[attr-defined]
+            
+            self.progress.emit("Cleanup completed successfully")
+            
+        except Exception as e:
+            self.error.emit(f"Error during cleanup: {str(e)}")
+        finally:
+            self.finished.emit()
+    
+    def stop(self):
+        """Stop the cleanup worker"""
+        self.running = False
