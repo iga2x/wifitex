@@ -274,7 +274,7 @@ class WifitexMainWindow(QMainWindow):
         self.attack_type_combo = QComboBox()
         self.attack_type_combo.addItems([
             "Auto (Recommended)", "WPS Pixie-Dust", "WPS PIN", 
-            "WPA/WPA2 Handshake", "PMKID"
+            "WPA/WPA2 Handshake", "PMKID", "KARMA Attack"
         ])
         attack_type_layout.addWidget(self.attack_type_combo)
         attack_layout.addLayout(attack_type_layout)
