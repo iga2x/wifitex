@@ -7,14 +7,14 @@ include EVILTWIN.md
 include requirements-gui.txt
 
 # Include data files
-include wordlist-top4800-probable.txt
+include wifitex/wordlists/wordlist-top4800-probable.txt
 
 # Include desktop files and policies
 include data/wifitex-gui.desktop
 include data/wifitex-gui.policy
 
 # Include all icons
-recursive-include icons *.png *.svg *.ico *.xpm
+recursive-include icons *.png *.svg *.ico
 
 # Include manual pages
 include man/wifitex.1

@@ -85,8 +85,7 @@ wifitex = ["*.txt", "*.md", "*.png", "*.svg", "*.ico", "*.xpm"]
     "icons/wifitex-22x22.png",
     "icons/wifitex-16x16.png",
     "icons/wifitex.svg",
-    "icons/wifitex.ico",
-    "icons/wifitex.xpm"
+    "icons/wifitex.ico"
 ]
 "share/doc/wifitex" = [
     "README.md", 
@@ -101,7 +100,7 @@ wifitex = ["*.txt", "*.md", "*.png", "*.svg", "*.ico", "*.xpm"]
     "man/wifitex-gui.1"
 ]
 "share/wifitex" = [
-    "wordlist-top4800-probable.txt"
+    "wifitex/wordlists/wordlist-top4800-probable.txt"
 ]
 
 # Project URLs
