@@ -80,7 +80,7 @@ class Target(object):
         if self.channel == '-1':
             raise Exception('Ignoring target with Negative-One (-1) channel')
 
-        # Filter broadcast/multicast BSSIDs, see https://github.com/iga2x/wifitex/issues/32
+        # Filter broadcast/multicast BSSIDs, see https://github.com/iga2x/wifitex/
         bssid_broadcast = re.compile(r'^(ff:ff:ff:ff:ff:ff|00:00:00:00:00:00)$', re.IGNORECASE)
         if bssid_broadcast.match(self.bssid):
             raise Exception('Ignoring target with Broadcast BSSID (%s)' % self.bssid)
