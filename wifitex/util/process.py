@@ -262,6 +262,20 @@ class Process(object):
                 pass
         cls._tracked_processes.clear()
 
+    @classmethod
+    def cleanup_all_processes(cls):
+        """
+        Public helper for wiping out any processes being tracked by the helper.
+        UI callers rely on this to make sure no lingering subprocesses survive
+        when the application exits.
+
+        The tracker is only active when explicitly enabled, so guard against the
+        method being called while tracking is disabled.
+        """
+        if not cls._tracking_enabled:
+            return
+        cls._cleanup_tracked_processes()
+
     def _track_process(self):
         self.__class__._track(self)
 

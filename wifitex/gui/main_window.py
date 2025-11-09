@@ -2971,17 +2971,20 @@ class MonitorModeThread(QThread):
             # Use NetworkUtils to enable monitor mode
             network_utils = NetworkUtils()
             success = network_utils.enable_monitor_mode(self.interface)
+            actual_iface = network_utils.interface or self.interface
             
             if success:
+                self.interface = actual_iface
                 self.monitor_completed.emit({
                     'operation': 'enable',
-                    'interface': self.interface,
-                    'message': f"Monitor mode enabled on {self.interface}"
+                    'interface': actual_iface,
+                    'message': f"Monitor mode enabled on {actual_iface}"
                 })
             else:
+                error_msg = network_utils.last_error or "Failed to enable monitor mode"
                 self.monitor_failed.emit({
                     'operation': 'enable',
-                    'error': "Failed to enable monitor mode"
+                    'error': error_msg
                 })
                 
         except Exception as e:
@@ -3000,17 +3003,20 @@ class MonitorModeThread(QThread):
             # Use NetworkUtils to disable monitor mode
             network_utils = NetworkUtils()
             success = network_utils.disable_monitor_mode(self.interface)
+            actual_iface = network_utils.interface or self.interface
             
             if success:
+                self.interface = actual_iface
                 self.monitor_completed.emit({
                     'operation': 'disable',
-                    'interface': self.interface,
-                    'message': f"Monitor mode disabled on {self.interface}"
+                    'interface': actual_iface,
+                    'message': f"Monitor mode disabled on {actual_iface}"
                 })
             else:
+                error_msg = network_utils.last_error or "Failed to disable monitor mode"
                 self.monitor_failed.emit({
                     'operation': 'disable',
-                    'error': "Failed to disable monitor mode"
+                    'error': error_msg
                 })
                 
         except Exception as e:
