@@ -74,8 +74,13 @@ class Color(object):
 
     @staticmethod
     def clear_entire_line():
-        import os
-        (rows, columns) = os.popen('stty size', 'r').read().split()
+        import shutil
+        try:
+            columns = shutil.get_terminal_size(fallback=(0, 120)).columns
+        except Exception:
+            columns = 120
+        if not columns or columns < 0:
+            columns = 120
         Color.p('\r' + (' ' * int(columns)) + '\r')
 
 
