@@ -1400,6 +1400,17 @@ class DependencyChecker:
         'hostapd',            # For creating rogue access points (KARMA attack)
         'dnsmasq'             # For DHCP and DNS services (KARMA attack)
     ]
+
+    # Alternate executable names that fulfill the same logical dependency.
+    TOOL_ALIASES: Dict[str, List[str]] = {
+        'hcxpcapngtool': ['hcxpcapngtool', 'hcxpcaptool'],
+    }
+
+    # Map tool identifiers to package names when installing via package manager.
+    TOOL_PACKAGE_MAP: Dict[str, str] = {
+        'hcxpcapngtool': 'hcxtools',
+        'hcxpcaptool': 'hcxtools',
+    }
     
     REQUIRED_PYTHON_PACKAGES = [
         'PyQt6', 'psutil', 'requests'
@@ -1417,6 +1428,19 @@ class DependencyChecker:
         }
         
         return results
+
+    @classmethod
+    def _get_tool_aliases(cls, tool: str) -> List[str]:
+        """Return executable aliases that satisfy a tool requirement."""
+        return cls.TOOL_ALIASES.get(tool, [tool])
+
+    @classmethod
+    def _tool_exists(cls, tool: str) -> Tuple[bool, Optional[str]]:
+        """Check whether a tool (or any of its aliases) exists in PATH."""
+        for alias in cls._get_tool_aliases(tool):
+            if SystemUtils.check_command_exists(alias):
+                return True, alias
+        return False, None
     
     @classmethod
     def check_gpu_support(cls) -> Dict[str, Any]:
@@ -1500,7 +1524,8 @@ class DependencyChecker:
         
         # Check required tools
         for tool in cls.REQUIRED_TOOLS:
-            tools_status[tool] = SystemUtils.check_command_exists(tool)
+            exists, _ = cls._tool_exists(tool)
+            tools_status[tool] = exists
             
         # Check optional tools with enhanced testing for critical ones
         for tool in cls.OPTIONAL_TOOLS:
@@ -1508,7 +1533,8 @@ class DependencyChecker:
                 # Test if these tools actually work, not just exist
                 tools_status[tool] = SystemUtils.check_command_works(tool)
             else:
-                tools_status[tool] = SystemUtils.check_command_exists(tool)
+                exists, _ = cls._tool_exists(tool)
+                tools_status[tool] = exists
             
         return tools_status
         
@@ -1548,13 +1574,20 @@ class DependencyChecker:
                 # Get detailed status for critical tools
                 tool_details[tool] = SystemUtils.get_command_status(tool)
             else:
-                # Simple exists check for other tools
-                tool_details[tool] = {
-                    'exists': SystemUtils.check_command_exists(tool),
-                    'works': SystemUtils.check_command_exists(tool),
-                    'error': None if SystemUtils.check_command_exists(tool) else f"Command '{tool}' not found in PATH",
-                    'output': None
+                exists, alias = cls._tool_exists(tool)
+                aliases_checked = cls._get_tool_aliases(tool)
+                status: Dict[str, Any] = {
+                    'exists': exists,
+                    'works': exists,
+                    'error': None,
+                    'output': None,
                 }
+                if alias and alias != tool:
+                    status['alias'] = alias
+                if not exists:
+                    alias_list = ', '.join(aliases_checked)
+                    status['error'] = f"Command '{tool}' not found in PATH (checked: {alias_list})"
+                tool_details[tool] = status
         
         return tool_details
     
@@ -1603,14 +1636,15 @@ class DependencyChecker:
         
         for tool in tools:
             try:
+                package_name = cls.TOOL_PACKAGE_MAP.get(tool, tool)
                 if package_manager == 'apt':
-                    cmd = ['apt', 'install', '-y', tool]
+                    cmd = ['apt', 'install', '-y', package_name]
                 elif package_manager == 'yum':
-                    cmd = ['yum', 'install', '-y', tool]
+                    cmd = ['yum', 'install', '-y', package_name]
                 elif package_manager == 'dnf':
-                    cmd = ['dnf', 'install', '-y', tool]
+                    cmd = ['dnf', 'install', '-y', package_name]
                 elif package_manager == 'pacman':
-                    cmd = ['pacman', '-S', '--noconfirm', tool]
+                    cmd = ['pacman', '-S', '--noconfirm', package_name]
                 else:
                     results[tool] = False
                     continue

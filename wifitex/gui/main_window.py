@@ -1727,7 +1727,7 @@ class WifitexMainWindow(QMainWindow):
                 'cowpatty': 'Detect handshake captures',
                 'hashcat': 'Crack PMKID hashes',
                 'hcxdumptool': 'Capture PMKID hashes',
-                'hcxpcapngtool': 'Convert PMKID packet captures'
+                'hcxpcapngtool': 'Convert PMKID packet captures (aka hcxpcaptool)'
             }
             
             # Add required tools first

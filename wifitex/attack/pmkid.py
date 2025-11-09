@@ -103,7 +103,7 @@ class AttackPMKID(Attack):
 
     def capture_pmkid(self):
         '''
-        Runs hashcat's hcxpcaptool to extract PMKID hash from the .pcapng file.
+        Runs hashcat's hcxpcaptool (or hcxpcapngtool) to extract PMKID hash from the .pcapng file.
         Returns:
             The PMKID hash (str) if found, otherwise None.
         '''

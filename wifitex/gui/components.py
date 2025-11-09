@@ -210,7 +210,7 @@ class AttackManager(QWidget):
         """Check if required tools are available for the attack type"""
         if attack_type.lower() == 'pmkid':
             if not self.available_tools.get('hcxpcapngtool', False):
-                return "PMKID attacks require hcxpcapngtool. Install with: sudo apt install hcxtools"
+                return "PMKID attacks require hcxpcapngtool (aka hcxpcaptool). Install with: sudo apt install hcxtools"
             if not self.available_tools.get('hashcat', False):
                 return "PMKID attacks require hashcat. Install with: sudo apt install hashcat"
                 
@@ -3451,10 +3451,45 @@ class ScanWorker(QThread):
                     new_networks = self.parse_csv_files()
                     if new_networks:
                         # Accumulate networks (don't replace, add new ones)
-                        existing_bssids = {net.get('bssid', '') for net in all_networks}
+                        existing_networks = {
+                            net.get('bssid', ''): net
+                            for net in all_networks
+                            if net.get('bssid')
+                        }
+                        fields_to_refresh = (
+                            'essid',
+                            'channel',
+                            'power',
+                            'signal_quality',
+                            'encryption',
+                            'cipher',
+                            'auth',
+                            'speed',
+                            'beacons',
+                            'ivs',
+                            'lan_ip',
+                            'first_seen',
+                            'last_seen',
+                            'vendor',
+                            'network_type',
+                            'wps',
+                            'clients',
+                            'client_details',
+                        )
                         for net in new_networks:
-                            if net.get('bssid', '') not in existing_bssids:
+                            bssid = net.get('bssid', '')
+                            if not bssid:
+                                continue
+                            current = existing_networks.get(bssid)
+                            if current:
+                                for field in fields_to_refresh:
+                                    if field in net:
+                                        value = net[field]
+                                        if value not in (None, '') or field in ('clients', 'client_details'):
+                                            current[field] = value
+                            else:
                                 all_networks.append(net)
+                                existing_networks[bssid] = net
                         
                         current_count = len(all_networks)
                         

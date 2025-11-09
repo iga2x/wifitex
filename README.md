@@ -111,7 +111,7 @@ wifitex/
 | `coWPAtty` | Handshake validation | `sudo apt install cowpatty` |
 | `hashcat` | Advanced password cracking | `sudo apt install hashcat` |
 | `hcxdumptool` | PMKID hash capture | `sudo apt install hcxdumptool` |
-| `hcxpcaptool` | PMKID format conversion | `sudo apt install hcxtools` |
+| `hcxpcapngtool` (`hcxpcaptool`) | PMKID format conversion | `sudo apt install hcxtools` |
 
 **GUI Dependencies (for GUI mode):**
 - `PyQt6` - Modern GUI framework
