@@ -54,8 +54,10 @@ class AttackWPA(Attack):
         if Configuration.wordlist is None:
             Color.pl('{!} {O}Not cracking handshake because' +
                      ' wordlist ({R}--dict{O}) is not set')
-            self.success = False
-            return False
+            Color.pl('{+} {G}Handshake captured and saved to {C}%s{W}' % handshake.capfile)
+            self.crack_result = None
+            self.success = True
+            return True
 
         elif not os.path.exists(Configuration.wordlist):
             Color.pl('{!} {O}Not cracking handshake because' +
