@@ -1,0 +1,238 @@
+.TH WIFITEX 1 "2024-01-01" "Wifitex 2.2.5" "Wireless Network Auditor"
+.SH NAME
+wifitex \- Automated wireless network auditor
+.SH SYNOPSIS
+.B wifitex
+[\fIOPTIONS\fR]
+.PP
+.B wifitex --gui
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+Wifitex is a Python script for auditing wireless networks. It runs existing 
+wireless-auditing tools for you. Stop memorizing command arguments & switches!
+
+Wifitex is designed to use all known methods for retrieving the password of a 
+wireless access point (router). These methods include:
+
+.TP
+.B WPS Attacks
+The Offline Pixie-Dust attack and Online Brute-Force PIN attack
+.TP
+.B WPA/WPA2 Attacks
+WPA Handshake Capture and PMKID Hash Capture with offline cracking
+.TP
+.B KARMA Attack
+Enhanced Evil Twin with PNL (Preferred Network List) capture and multi-interface support
+
+.SH OPTIONS
+.TP
+.B --gui
+Launch the graphical user interface
+.TP
+.B -h, --help
+Show help message and exit
+.TP
+.B -v, --verbose
+Verbose output (use -vv or -vvv for more verbosity)
+.TP
+.B -i, --interface <interface>
+Wireless interface to use
+.TP
+.B -c, --channel <channel>
+Channel to scan for targets
+.TP
+.B --five-ghz
+Include 5GHz networks in scan
+.TP
+.B --wps-only
+Only use WPS attacks on targets
+.TP
+.B --no-wps
+Never use WPS attacks
+.TP
+.B --wpa-only
+Only use WPA handshake attacks
+.TP
+.B --pmkid-only
+Only use PMKID hash capture attacks
+.TP
+.B --pmkid-timeout <seconds>
+Time to wait for PMKID capture (default: 60)
+.TP
+.B --no-pixie
+Skip WPS Pixie-Dust attack
+.TP
+.B --no-pin
+Skip WPS PIN attack
+.TP
+.B --bully
+Use bully instead of reaver for WPS attacks
+.TP
+.B --reaver
+Use reaver for WPS attacks (default)
+.TP
+.B --crack
+Crack captured handshakes/PMKID hashes using wordlist
+.TP
+.B --cracked
+Show previously cracked networks
+.TP
+.B --check <file>
+Check if .cap file contains a handshake
+.TP
+.B --dict, --wordlist <file>
+Custom wordlist file for cracking (auto-detects wordlists from wifitex/wordlists/)
+.TP
+.B --karma
+Use KARMA attack (Enhanced Evil Twin with PNL capture)
+.TP
+.B --karma-probe-timeout <seconds>
+Time to capture probe requests before KARMA attack (default: 30)
+.TP
+.B --karma-rogue-iface <interface>
+Interface for rogue AP (default: same as scan interface)
+.TP
+.B --karma-probe-iface <interface>
+Interface for capturing probe requests (default: same as scan interface)
+.TP
+.B --karma-min-probes <num>
+Minimum probe requests before starting attack (default: 3)
+.TP
+.B --karma-all-channels
+Capture probe requests from all channels (default: current channel only)
+.TP
+.B --enable-monitor
+Enable monitor mode on interface and exit
+.TP
+.B --disable-monitor
+Disable monitor mode on interface and exit
+.TP
+.B --kill
+Kill processes that conflict with wireless operations
+.TP
+.B --random-mac, -mac
+Randomize MAC address when scanning/attacking
+.TP
+.B --no-deauth
+Never send deauth packets
+.TP
+.B --num-deauths <num>
+Number of deauth packets to send (default: 1)
+.TP
+.B -p, --pillage
+Attack all targets after scan_time seconds (default: 10)
+.TP
+.B --target-bssid <mac>
+Target specific BSSID
+.TP
+.B --target-essid <name>
+Target specific ESSID
+.TP
+.B --ignore-essid <name>
+Ignore networks with ESSID containing this string
+.TP
+.B --clients-only
+Only show targets that have associated clients
+.TP
+.B --show-bssids
+Show BSSIDs in target list
+.TP
+.B --crack-dir <dir>
+Directory to store cracked passwords
+.TP
+.B --hs-dir <dir>
+Directory to store handshake captures
+.TP
+.B --new-hs
+Always capture new handshakes (ignore existing)
+.TP
+.B --strip
+Strip non-handshake packets from .cap files
+.B --wpa-deauth-timeout <seconds>
+Seconds to wait between deauths (default: 15)
+.TP
+.B --wpa-attack-timeout <seconds>
+Seconds to wait before failing WPA attack (default: 500)
+.TP
+.B --pmkid-timeout <seconds>
+Seconds to wait for PMKID capture (default: 30)
+.TP
+.B --wps-pixie-timeout <seconds>
+Seconds to wait for WPS Pixie-Dust attack (default: 300)
+.TP
+.B --wps-fail-threshold <num>
+Max number of WPS failures before stopping (default: 100)
+.TP
+.B --wps-timeout-threshold <num>
+Max number of WPS timeouts before stopping (default: 100)
+.TP
+.B --wps-ignore-lock
+Ignore WPS lock-outs
+
+.SH EXAMPLES
+.TP
+.B wifitex
+Start wifitex with default settings
+.TP
+.B wifitex --gui
+Launch the graphical user interface
+.TP
+.B wifitex -i wlan0
+Use wlan0 interface
+.TP
+.B wifitex -c 6
+Scan only channel 6
+.TP
+.B wifitex --wps-only
+Only attack WPS-enabled networks
+.TP
+.B wifitex --wpa-only --wordlist /path/to/wordlist.txt
+Only use WPA attacks with custom wordlist
+.TP
+.B wifitex --crack
+Try to crack existing handshakes
+.TP
+.B wifitex --cracked
+Show previously cracked networks
+
+.SH REQUIREMENTS
+Wifitex requires the following tools to be installed:
+
+.TP
+.B Required:
+aircrack-ng, iwconfig, ifconfig
+.TP
+.B Optional:
+tshark, reaver, bully, cowpatty, hashcat
+
+.SH FILES
+.TP
+.B /usr/share/wifitex/
+Installation directory
+.TP
+.B ~/.config/wifitex/
+Configuration directory
+.TP
+.B /tmp/wifitex_*/
+Temporary files (automatically cleaned up)
+
+.SH BUGS
+Report bugs to https://github.com/iga2x/wifitex/issues
+
+.SH AUTHOR
+iga2x <mdpoo2@gmail.com>
+
+.SH COPYRIGHT
+Copyright (C) 2024 iga2x
+This program is free software; you can redistribute it and/or modify it under 
+the terms of the GNU General Public License as published by the Free Software 
+Foundation; either version 2 of the License, or (at your option) any later version.
+
+.SH SEE ALSO
+.BR aircrack-ng (1),
+.BR airodump-ng (1),
+.BR aireplay-ng (1),
+.BR airmon-ng (1),
+.BR reaver (1),
+.BR bully (1),
+.BR tshark (1)

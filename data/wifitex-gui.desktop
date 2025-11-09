@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Wifitex GUI
+Comment=Wireless Network Auditor - Graphical Interface
+GenericName=WiFi Security Tool
+Exec=/usr/local/bin/wifitex-gui-launcher
+TryExec=/usr/local/bin/wifitex-gui-launcher
+Icon=wifitex-256x256
+Terminal=false
+StartupNotify=true
+NoDisplay=false
+Categories=Network;Security;
+Keywords=wireless;wifi;security;audit;network;penetration;testing;
+StartupWMClass=Wifitex GUI
