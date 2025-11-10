@@ -3,7 +3,7 @@
 
 from .dependency import Dependency
 from .airodump import Airodump
-from ..model.attack import Attack
+from ..model.attack import Attack, AttackAborted
 from ..model.wps_result import CrackResultWPS
 from ..util.color import Color
 from ..util.timer import Timer
@@ -72,7 +72,12 @@ class Bully(Attack, Dependency):
                       output_file_prefix='wps_pin') as airodump:
             # Wait for target
             self.pattack('Waiting for target to appear...')
-            self.target = self.wait_for_target(airodump)
+            try:
+                self.target = self.wait_for_target(airodump)
+            except AttackAborted:
+                self.pattack('{O}Aborted by user request{W}', newline=True)
+                self.stop()
+                return
 
             # Start bully
             self.bully_proc = Process(self.cmd,
@@ -94,7 +99,7 @@ class Bully(Attack, Dependency):
                 self.stop()
                 raise e
 
-        if self.crack_result is None:
+        if self.crack_result is None and not self.should_abort():
             self.pattack('{R}Failed{W}', newline=True)
 
     def _run(self, airodump):
@@ -104,8 +109,16 @@ class Bully(Attack, Dependency):
             return
 
         while bully_proc.poll() is None:
+            if self.should_abort():
+                self.pattack('{O}Aborted by user request{W}', newline=True)
+                self.stop()
+                break
             try:
                 self.target = self.wait_for_target(airodump)
+            except AttackAborted:
+                self.pattack('{O}Aborted by user request{W}', newline=True)
+                self.stop()
+                break
             except Exception as e:
                 self.pattack('{R}Failed: {O}%s{W}' % e, newline=True)
                 Color.pexception(e)

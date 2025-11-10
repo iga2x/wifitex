@@ -6,6 +6,7 @@ import signal
 import os
 import shlex
 import atexit
+import shutil
 from typing import Any, IO, Optional, Sequence, Union, List
 
 from subprocess import Popen, PIPE
@@ -82,14 +83,55 @@ class Process(object):
     @staticmethod
     def exists(program):
         ''' Checks if program is installed on this system '''
-        p = Process(['which', program])
-        stdout = (p.stdout() or '').strip()
-        stderr = (p.stderr() or '').strip()
+        return Process.which(program) is not None
 
-        if stdout == '' and stderr == '':
-            return False
+    @staticmethod
+    def which(program: Optional[Union[str, os.PathLike]]):
+        ''' Returns absolute path to program, or None if not found '''
+        if not program:
+            return None
+        try:
+            return shutil.which(str(program))
+        except Exception:
+            return None
 
-        return True
+    @staticmethod
+    def get_version(program: Union[str, os.PathLike],
+                    version_args: Optional[Union[str, Sequence[str]]] = None) -> Optional[str]:
+        '''
+            Attempts to fetch a version string for the given program.
+            Returns first non-empty line of stdout/stderr, or None if version could not be determined.
+        '''
+        if not program:
+            return None
+
+        if version_args is None:
+            args: Sequence[str] = ('--version',)
+        elif isinstance(version_args, str):
+            args = (version_args,)
+        else:
+            args = tuple(str(arg) for arg in version_args)
+
+        if len(args) == 0:
+            return None
+
+        cmd: List[str] = [str(program)]
+        cmd.extend(args)
+
+        try:
+            stdout, stderr = Process.call(cmd)
+        except Exception:
+            return None
+
+        for stream in (stdout, stderr):
+            if isinstance(stream, bytes):
+                stream = stream.decode('utf-8', errors='ignore')
+            if isinstance(stream, str):
+                text = stream.strip()
+                if text != '':
+                    return text.splitlines()[0]
+
+        return None
 
     def __init__(self,
             command: Union[str, Sequence[Union[str, os.PathLike]]],

@@ -4,7 +4,7 @@
 from .dependency import Dependency
 from .airodump import Airodump
 from .bully import Bully # for PSK retrieval
-from ..model.attack import Attack
+from ..model.attack import Attack, AttackAborted
 from ..config import Configuration
 from ..model.wps_result import CrackResultWPS
 from ..util.color import Color
@@ -72,8 +72,7 @@ class Reaver(Attack, Dependency):
             self.pattack('{R}Failed:{O} %s' % str(e), newline=True)
         finally:
             # Stop reaver if it's still running
-            if self.reaver_proc and self.reaver_proc.poll() is None:
-                self.reaver_proc.interrupt()
+            self.stop()
             # Clean up open file handle
             if self.output_write and not self.output_write.closed:
                 self.output_write.close()
@@ -91,7 +90,11 @@ class Reaver(Attack, Dependency):
 
             # Wait for target
             self.pattack('Waiting for target to appear...')
-            self.target = self.wait_for_target(airodump)
+            try:
+                self.target = self.wait_for_target(airodump)
+            except AttackAborted:
+                self.pattack('{O}Aborted by user request{W}', newline=True)
+                return
 
             # Start reaver
             self.reaver_proc = Process(self.reaver_cmd,
@@ -101,10 +104,22 @@ class Reaver(Attack, Dependency):
             self.reaver_proc.stdin('y\n')
 
             # Loop while reaver is running
+            aborted = False
             while self.crack_result is None and self.reaver_proc.poll() is None:
+                if self.should_abort():
+                    self.pattack('{O}Aborted by user request{W}', newline=True)
+                    aborted = True
+                    self.stop()
+                    break
 
                 # Refresh target information (power)
-                self.target = self.wait_for_target(airodump)
+                try:
+                    self.target = self.wait_for_target(airodump)
+                except AttackAborted:
+                    self.pattack('{O}Aborted by user request{W}', newline=True)
+                    aborted = True
+                    self.stop()
+                    break
 
                 # Update based on reaver output
                 stdout = self.get_output()
@@ -122,6 +137,9 @@ class Reaver(Attack, Dependency):
                     raise Exception('{O}Access point is {R}Locked{W}')
 
                 time.sleep(0.5)
+
+            if aborted:
+                return
 
             # Check if crack result is in output
             stdout = self.get_output()
@@ -373,6 +391,10 @@ class Reaver(Attack, Dependency):
             Color.pe('\n{P} [reaver:stdout] %s' % '\n [reaver:stdout] '.join(stdout.split('\n')))
 
         return stdout.strip()
+
+    def stop(self):
+        if self.reaver_proc and self.reaver_proc.poll() is None:
+            self.reaver_proc.interrupt()
 
 
 if __name__ == '__main__':

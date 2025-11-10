@@ -26,7 +26,11 @@ class John(Dependency):
             raise ValueError('No wordlist specified for john WPA attack')
 
         # Use `john --list=formats` to find if OpenCL or CUDA is supported.
-        formats_stdout = Process(['john', '--list=formats']).stdout() or ''
+        formats_raw = Process(['john', '--list=formats']).stdout()
+        if isinstance(formats_raw, bytes):
+            formats_stdout = formats_raw.decode('utf-8', errors='ignore')
+        else:
+            formats_stdout = formats_raw or ''
         if 'wpapsk-opencl' in formats_stdout:
             john_format = 'wpapsk-opencl'
         elif 'wpapsk-cuda' in formats_stdout:

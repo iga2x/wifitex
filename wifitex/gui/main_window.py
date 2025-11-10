@@ -458,12 +458,13 @@ class WifitexMainWindow(QMainWindow):
         self.tab_widget.addTab(attack_info_tab, "Attack Info")
         
         # Settings tab
-        settings_scroll = QScrollArea()
-        settings_scroll.setWidget(self.settings_panel)
-        settings_scroll.setWidgetResizable(True)
-        settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.tab_widget.addTab(settings_scroll, "Settings")
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidget(self.settings_panel)
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tab_widget.addTab(self.settings_scroll, "Settings")
+        self.settings_tab_index = self.tab_widget.indexOf(self.settings_scroll)
         
         layout.addWidget(self.tab_widget)
         
@@ -2464,6 +2465,21 @@ class WifitexMainWindow(QMainWindow):
         """
         
         self.show_scrollable_dialog("Keyboard Shortcuts", shortcuts_text)
+    
+    def open_settings_shortcut(self):
+        """Open the settings tab via keyboard shortcut"""
+        try:
+            if hasattr(self, "tab_widget"):
+                settings_index = getattr(self, "settings_tab_index", None)
+                if settings_index is not None and settings_index >= 0:
+                    self.tab_widget.setCurrentIndex(settings_index)
+                    if hasattr(self.settings_panel, "setFocus"):
+                        self.settings_panel.setFocus(Qt.FocusReason.ShortcutFocusReason)
+                    self.status_update.emit("Opened Settings tab")
+                    return
+        except Exception as exc:
+            logger.error(f"Error opening settings via shortcut: {exc}")
+        self.status_update.emit("Settings panel unavailable")
         
     def show_system_info(self):
         """Show system information"""
@@ -2578,30 +2594,119 @@ class WifitexMainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+P"), self, self.attack_wpa_selected)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self, self.stop_all_attacks)
         
+        # Settings and copy shortcuts
+        QShortcut(QKeySequence("Ctrl+,"), self, self.open_settings_shortcut)
+        QShortcut(QKeySequence.StandardKey.Copy, self.networks_table, self.copy_selected_network_details)
+        
     def select_all_networks(self):
         """Select all networks in the table"""
-        # This would need to be implemented based on the actual network table interface
-        self.status_update.emit("Select all networks shortcut triggered")
+        if not hasattr(self, "networks_table"):
+            return
+        total_rows = self.networks_table.rowCount()
+        if total_rows == 0:
+            self.status_update.emit("No networks available to select")
+            return
+        self.networks_table.selectAll()
+        self.on_network_selection_changed()
+        self.status_update.emit(f"Selected {total_rows} network(s)")
     
     def deselect_all_networks(self):
         """Deselect all networks in the table"""
-        # This would need to be implemented based on the actual network table interface
-        self.status_update.emit("Deselect all networks shortcut triggered")
+        if not hasattr(self, "networks_table"):
+            return
+        if not self.networks_table.selectedIndexes():
+            self.status_update.emit("No networks selected")
+            return
+        self.networks_table.clearSelection()
+        self.on_network_selection_changed()
+        self.status_update.emit("Cleared network selection")
     
     def attack_wps_selected(self):
         """Attack WPS for selected networks"""
-        # This would need to be implemented based on the actual attack manager interface
-        self.status_update.emit("WPS attack shortcut triggered")
+        if not self._ensure_network_selection():
+            QMessageBox.information(self, "No Selection", "Select at least one network before starting a WPS attack.")
+            return
+        if not self._set_attack_type(["WPS Pixie-Dust", "WPS PIN", "Auto (Recommended)"]):
+            self.status_update.emit("No WPS attack profile available")
+            return
+        self.status_update.emit("Starting WPS attack")
+        self.start_attack()
     
     def attack_wpa_selected(self):
         """Attack WPA for selected networks"""
-        # This would need to be implemented based on the actual attack manager interface
-        self.status_update.emit("WPA attack shortcut triggered")
+        if not self._ensure_network_selection():
+            QMessageBox.information(self, "No Selection", "Select at least one network before starting a WPA attack.")
+            return
+        if not self._set_attack_type(["WPA/WPA2 Handshake", "PMKID", "Auto (Recommended)"]):
+            self.status_update.emit("No WPA attack profile available")
+            return
+        self.status_update.emit("Starting WPA attack")
+        self.start_attack()
     
     def toggle_scan(self):
         """Toggle scan on/off"""
-        # This would need to be implemented based on the actual scan button interface
-        self.status_update.emit("Scan toggle shortcut triggered")
+        try:
+            if getattr(self.scanner, "scanning", False):
+                self.status_update.emit("Stopping scan...")
+                self.stop_scan()
+            else:
+                self.status_update.emit("Starting scan...")
+                self.start_scan()
+        except Exception as exc:
+            logger.error(f"Error toggling scan: {exc}")
+            self.status_update.emit(f"Unable to toggle scan: {exc}")
+
+    def copy_selected_network_details(self):
+        """Copy selected network details to the clipboard"""
+        if not hasattr(self, "networks_table"):
+            return
+        selected_indexes = self.networks_table.selectedIndexes()
+        if not selected_indexes:
+            self.status_update.emit("No networks selected to copy")
+            return
+
+        selected_rows = sorted({index.row() for index in selected_indexes})
+        if not selected_rows:
+            self.status_update.emit("No networks selected to copy")
+            return
+
+        headers = []
+        for col in range(self.networks_table.columnCount()):
+            header_item = self.networks_table.horizontalHeaderItem(col)
+            headers.append(header_item.text() if header_item else f"Column {col + 1}")
+
+        lines = ["\t".join(headers)]
+        for row in selected_rows:
+            column_values = []
+            for col in range(self.networks_table.columnCount()):
+                item = self.networks_table.item(row, col)
+                column_values.append(item.text().strip() if item and item.text() else "")
+            lines.append("\t".join(column_values))
+
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            self.status_update.emit("Clipboard unavailable")
+            return
+        clipboard.setText("\n".join(lines))
+        self.status_update.emit(f"Copied details for {len(selected_rows)} network(s)")
+
+    def _ensure_network_selection(self) -> bool:
+        """Ensure there is at least one network selected"""
+        if self.selected_networks:
+            return True
+        if hasattr(self, "networks_table") and self.networks_table.selectedIndexes():
+            self.on_network_selection_changed()
+            return bool(self.selected_networks)
+        return False
+
+    def _set_attack_type(self, preferred_labels: List[str]) -> bool:
+        """Select the first available attack type matching preferred labels"""
+        for label in preferred_labels:
+            index = self.attack_type_combo.findText(label, Qt.MatchFlag.MatchExactly)
+            if index >= 0:
+                self.attack_type_combo.setCurrentIndex(index)
+                return True
+        return False
         
     def load_settings(self):
         """Load application settings"""

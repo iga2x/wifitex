@@ -3,6 +3,11 @@
 
 import time
 
+
+class AttackAborted(Exception):
+    '''Raised when an attack is cancelled by the user or GUI'''
+    pass
+
 class Attack(object):
     '''Contains functionality common to all attacks.'''
 
@@ -15,6 +20,9 @@ class Attack(object):
         self.running: bool = True
         self.skip_current_attack: bool = False
 
+    def should_abort(self) -> bool:
+        return (not getattr(self, 'running', True)) or getattr(self, 'skip_current_attack', False)
+
     def run(self):
         raise Exception('Unimplemented method: run')
 
@@ -23,6 +31,8 @@ class Attack(object):
         start_time = time.time()
         targets = airodump.get_targets(apply_filter=False)
         while len(targets) == 0:
+            if self.should_abort():
+                raise AttackAborted('Attack aborted while waiting for target')
             # Wait for target to appear in airodump.
             if int(time.time() - start_time) > Attack.target_wait:
                 raise Exception('Target did not appear after %d seconds, stopping' % Attack.target_wait)
