@@ -89,8 +89,9 @@ class Airmon(Dependency):
         '''Returns List of AirmonIface objects known by airmon-ng'''
         interfaces = []
         p = Process('airmon-ng')
-        stdout = p.stdout()
-        for line in (stdout or '').split('\n'):
+        raw_stdout = p.stdout()
+        stdout = raw_stdout.decode('utf-8', errors='ignore') if isinstance(raw_stdout, bytes) else (raw_stdout or '')
+        for line in stdout.splitlines():
             # [PHY ]IFACE DRIVER CHIPSET
             airmon_re = re.compile(r'^(?:([^\t]*)\t+)?([^\t]*)\t+([^\t]*)\t+([^\t]*)$')
             matches = airmon_re.match(line)
@@ -233,7 +234,8 @@ class Airmon(Dependency):
             Color.pl('{G}enabled {C}%s{W}' % native_iface)
             return native_iface
 
-        airmon_output = Process(['airmon-ng', 'start', iface_name]).stdout()
+        raw_airmon_output = Process(['airmon-ng', 'start', iface_name]).stdout()
+        airmon_output = raw_airmon_output.decode('utf-8', errors='ignore') if isinstance(raw_airmon_output, bytes) else (raw_airmon_output or '')
         enabled_iface = Airmon._parse_airmon_start(airmon_output)
 
         if enabled_iface is None and driver in Airmon.BAD_DRIVERS:
@@ -295,7 +297,8 @@ class Airmon(Dependency):
     def stop(iface):
         Color.p('{!} {R}disabling {O}monitor mode{O} on {R}%s{O}... ' % iface)
 
-        airmon_output = Process(['airmon-ng', 'stop', iface]).stdout()
+        raw_airmon_output = Process(['airmon-ng', 'stop', iface]).stdout()
+        airmon_output = raw_airmon_output.decode('utf-8', errors='ignore') if isinstance(raw_airmon_output, bytes) else (raw_airmon_output or '')
 
         (disabled_iface, enabled_iface) = Airmon._parse_airmon_stop(airmon_output)
 
@@ -401,7 +404,8 @@ class Airmon(Dependency):
     def terminate_conflicting_processes():
         ''' Deletes conflicting processes reported by airmon-ng '''
 
-        airmon_output = Process(['airmon-ng', 'check']).stdout()
+        raw_output = Process(['airmon-ng', 'check']).stdout()
+        airmon_output = raw_output.decode('utf-8', errors='ignore') if isinstance(raw_output, bytes) else (raw_output or '')
 
         # Conflicting process IDs and names
         pid_pnames = []
@@ -409,7 +413,7 @@ class Airmon(Dependency):
         # 2272    dhclient
         # 2293    NetworkManager
         pid_pname_re = re.compile(r'^\s*(\d+)\s*([a-zA-Z0-9_\-]+)\s*$')
-        for line in (airmon_output or '').splitlines():
+        for line in airmon_output.splitlines():
             match = pid_pname_re.match(line)
             if match:
                 pid = match.group(1)

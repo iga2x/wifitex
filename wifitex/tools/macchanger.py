@@ -74,7 +74,7 @@ class Macchanger(Dependency):
 
         # -r to use random MAC address
         # -e to keep vendor bytes the same
-        if cls.down_macch_up(iface, ['-e']):
+        if cls.down_macch_up(iface, ['-r', '-e']):
             cls.is_changed = True
             new_mac = Ifconfig.get_mac(iface)
 

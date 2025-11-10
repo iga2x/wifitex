@@ -34,7 +34,9 @@ class Tshark(Dependency):
         # E.g. 12:34:56,21:43:65 -> 3
         target_client_msg_nums = {}
 
-        for line in output.split('\n'):
+        text_output = output.decode('utf-8', errors='ignore') if isinstance(output, bytes) else str(output)
+
+        for line in text_output.splitlines():
             src, dst, index, total = Tshark._extract_src_dst_index_total(line)
 
             if src is None or dst is None or index is None or total is None:
@@ -94,9 +96,11 @@ class Tshark(Dependency):
         ]
         tshark = Process(command, devnull=False)
 
-        output = tshark.stdout()
-        if not output:
+        raw_output = tshark.stdout()
+        if not raw_output:
             return []
+
+        output = raw_output.decode('utf-8', errors='ignore') if isinstance(raw_output, bytes) else raw_output
 
         target_client_msg_nums = Tshark._build_target_client_handshake_map(output, bssid=bssid)
 
@@ -126,15 +130,17 @@ class Tshark(Dependency):
             '-r', capfile, # Path to cap file
             '-n', # Don't resolve addresses
             # Extract beacon frames
-            '-Y', '"wlan.fc.type_subtype == 0x08 || wlan.fc.type_subtype == 0x05"',
+            '-Y', 'wlan.fc.type_subtype == 0x08 || wlan.fc.type_subtype == 0x05',
         ]
         tshark = Process(command, devnull=False)
 
-        output = tshark.stdout()
-        if not output:
+        raw_output = tshark.stdout()
+        if not raw_output:
             return list(ssid_pairs)
 
-        for line in output.split('\n'):
+        output = raw_output.decode('utf-8', errors='ignore') if isinstance(raw_output, bytes) else str(raw_output)
+
+        for line in output.splitlines():
             # Extract src, dst, and essid
             mac_regex = ('[a-zA-Z0-9]{2}:' * 6)[:-1]
             match = re.search(r'(%s) [^ ]* (%s).*.*SSID=(.*)$' % (mac_regex, mac_regex), line)
@@ -187,8 +193,8 @@ class Tshark(Dependency):
 
         try:
             p.wait()
-            lines = p.stdout()
-            if not lines:
+            raw_lines = p.stdout()
+            if not raw_lines:
                 return
         except:
             # Failure is acceptable
@@ -196,7 +202,9 @@ class Tshark(Dependency):
 
         wps_bssids = set()
         locked_bssids = set()
-        for line in lines.split('\n'):
+        lines = raw_lines.decode('utf-8', errors='ignore') if isinstance(raw_lines, bytes) else str(raw_lines)
+
+        for line in lines.splitlines():
             if ',' not in line:
                 continue
             bssid, locked = line.split(',')

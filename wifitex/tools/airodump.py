@@ -149,17 +149,20 @@ class Airodump(Dependency):
 
         # Remove .cap and .xor files from pwd
         for fil in os.listdir('.'):
-            if fil.startswith('replay_') and fil.endswith('.cap') or fil.endswith('.xor'):
+            if (fil.startswith('replay_') and fil.endswith('.cap')) or fil.endswith('.xor'):
                 os.remove(fil)
 
         # Remove replay/cap/xor files from temp
         temp_dir = Configuration.temp()
         for fil in os.listdir(temp_dir):
-            if fil.startswith('replay_') and fil.endswith('.cap') or fil.endswith('.xor'):
+            if (fil.startswith('replay_') and fil.endswith('.cap')) or fil.endswith('.xor'):
                 os.remove(os.path.join(temp_dir, fil))
 
-    def get_targets(self, old_targets=[], apply_filter=True):
+    def get_targets(self, old_targets=None, apply_filter=True):
         ''' Parses airodump's CSV file, returns list of Targets '''
+
+        if old_targets is None:
+            old_targets = []
 
         # Find the .CSV file
         csv_filename = None
@@ -324,6 +327,10 @@ class Airodump(Dependency):
             '--ignore-negative-one'
         ]
 
+        iface = Configuration.interface
+        if not iface:
+            return
+
         for target in self.targets:
             if target.essid_known:
                 continue
@@ -341,11 +348,15 @@ class Airodump(Dependency):
                 Color.pe('{C} [?] Deauthing %s (broadcast & %d clients){W}' % (target.bssid, len(target.clients)))
 
             # Deauth broadcast
-            iface = Configuration.interface
+            if not target.bssid:
+                continue
+
             Process(deauth_cmd + ['-a', target.bssid, iface])
 
             # Deauth clients
             for client in target.clients:
+                if not client.bssid:
+                    continue
                 Process(deauth_cmd + ['-a', target.bssid, '-c', client.bssid, iface])
 
 if __name__ == '__main__':

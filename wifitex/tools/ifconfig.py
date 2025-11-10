@@ -11,12 +11,14 @@ class Ifconfig(Dependency):
     dependency_url = 'apt-get install net-tools'
 
     @classmethod
-    def up(cls, interface, args=[]):
+    def up(cls, interface, args=None):
         '''Put interface up'''
         from ..util.process import Process
 
         command = ['ifconfig', interface]
-        if isinstance(args, list):
+        if args is None:
+            pass
+        elif isinstance(args, (list, tuple)):
             command.extend(args)
         elif isinstance(args, str):
             command.append(args)
@@ -43,9 +45,10 @@ class Ifconfig(Dependency):
     def get_mac(cls, interface):
         from ..util.process import Process
 
-        output = Process(['ifconfig', interface]).stdout()
-        if output is None:
+        raw_output = Process(['ifconfig', interface]).stdout()
+        if raw_output is None:
             raise Exception('No output received from ifconfig for %s' % interface)
+        output = raw_output.decode('utf-8', errors='ignore') if isinstance(raw_output, bytes) else str(raw_output)
 
         # Mac address separated by dashes
         mac_dash_regex = ('[a-zA-Z0-9]{2}-' * 6)[:-1]

@@ -45,7 +45,8 @@ class Pixiewps(Dependency):
 
         try:
             proc = Process(cmd)
-            output = proc.stdout() or ''
+            raw_output = proc.stdout()
+            output = raw_output.decode('utf-8', errors='ignore') if isinstance(raw_output, bytes) else (raw_output or '')
             
             if Configuration.verbose > 1:
                 Color.pe('\n{P} [pixiewps] %s{W}' % output)

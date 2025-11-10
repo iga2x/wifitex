@@ -395,9 +395,10 @@ class Bully(Attack, Dependency):
 
         bully_proc = Process(cmd)
 
-        stderr_output = bully_proc.stderr() or ''
+        raw_stderr = bully_proc.stderr()
+        stderr_output = raw_stderr.decode('utf-8', errors='ignore') if isinstance(raw_stderr, bytes) else (raw_stderr or '')
 
-        for line in stderr_output.split('\n'):
+        for line in stderr_output.splitlines():
             key_re = re.search(r"^\s*KEY\s*:\s*'(.*)'\s*$", line)
             if key_re is not None:
                 psk = key_re.group(1)
