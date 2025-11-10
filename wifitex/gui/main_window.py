@@ -18,6 +18,7 @@ import traceback
 import re
 import base64
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 from PyQt6.QtWidgets import (
@@ -49,6 +50,7 @@ from typing import Any, cast
 # Make linter aware of dynamically added dialog in components
 CleanupProgressDialog = cast(Any, gui_components).CleanupProgressDialog
 from .utils import SystemUtils, NetworkUtils, ConfigManager
+from ..config import Configuration
 from .error_handler import handle_errors, ConfigurationError
 from .logger import get_logger
 from .path_utils import get_project_root
@@ -94,6 +96,7 @@ class WifitexMainWindow(QMainWindow):
         # Caches for non-blocking status updates
         self._interface_status_cache: Dict[str, str] = {}
         self._monitor_interfaces_cache: List[str] = []
+        self._preferred_interface: Optional[str] = None
         
         # Initialize UI components
         self.scanner = NetworkScanner()
@@ -127,6 +130,7 @@ class WifitexMainWindow(QMainWindow):
         
         # Initialize tool detection
         self.initialize_tool_detection()
+        self._configure_handshake_directory()
         
         # Check system requirements (deferred to avoid slow startup)
         
@@ -700,6 +704,10 @@ class WifitexMainWindow(QMainWindow):
     def refresh_interfaces(self):
         """Refresh available network interfaces"""
         try:
+            current_text = self.interface_combo.currentText().strip()
+            if current_text:
+                self._preferred_interface = current_text
+
             # Check system requirements on first refresh (lazy loading)
             if not hasattr(self, '_system_checked'):
                 if not self.check_system_requirements():
@@ -722,11 +730,30 @@ class WifitexMainWindow(QMainWindow):
 
     def _on_interfaces_ready(self, interfaces: List[str]):
         self._last_interfaces = interfaces
+        previous_selection = self._preferred_interface or self.interface_combo.currentText().strip()
+
+        self.interface_combo.blockSignals(True)
         self.interface_combo.clear()
         self.interface_combo.addItems(interfaces)
-        if interfaces:
+
+        selected_interface: Optional[str] = None
+
+        if previous_selection:
+            index = self.interface_combo.findText(previous_selection, Qt.MatchFlag.MatchExactly)
+            if index >= 0:
+                self.interface_combo.setCurrentIndex(index)
+                selected_interface = previous_selection
+
+        if selected_interface is None and interfaces:
+            self.interface_combo.setCurrentIndex(0)
+            selected_interface = interfaces[0]
+
+        self.interface_combo.blockSignals(False)
+
+        if selected_interface:
+            self._preferred_interface = selected_interface
             self.status_update.emit(f"Found {len(interfaces)} network interfaces")
-            self.check_monitor_mode_status(interfaces[0])
+            self.check_monitor_mode_status(selected_interface)
         else:
             self.status_update.emit("No network interfaces found")
         # Update status bar with cached data
@@ -735,9 +762,12 @@ class WifitexMainWindow(QMainWindow):
     def on_interface_changed(self, interface):
         """Handle interface selection change"""
         if interface:
+            self._preferred_interface = interface
             self.check_monitor_mode_status(interface)
             self.status_update.emit(f"Selected interface: {interface}")
             self.update_status_bar()
+        else:
+            self._preferred_interface = None
             
     def check_monitor_mode_status(self, interface):
         """Check if interface is in monitor mode - Non-blocking version"""
@@ -791,6 +821,29 @@ class WifitexMainWindow(QMainWindow):
         except Exception:
             # Silently continue - don't block on failures
             pass
+    
+    def _configure_handshake_directory(self):
+        """Ensure handshakes are stored in a predictable, dedicated directory."""
+        try:
+            from .path_utils import get_handshake_dir
+            handshake_dir_setting = self.config_manager.get_setting('handshake_dir')
+
+            handshake_dir: Optional[Path] = None
+
+            if handshake_dir_setting:
+                handshake_dir = Path(str(handshake_dir_setting)).expanduser()
+            else:
+                detected = get_handshake_dir()
+                if detected:
+                    handshake_dir = Path(detected).expanduser()
+                else:
+                    handshake_dir = (self.config_manager.config_dir / "hs").expanduser()
+                self.config_manager.set_setting('handshake_dir', str(handshake_dir))
+
+            handshake_dir.mkdir(parents=True, exist_ok=True)
+            Configuration.wpa_handshake_dir = str(handshake_dir)
+        except Exception as exc:
+            logger.warning(f"[GUI] Failed to configure handshake directory: {exc}")
             
     def enable_monitor_mode(self):
         """Enable monitor mode on selected interface"""
