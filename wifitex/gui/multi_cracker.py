@@ -14,6 +14,9 @@ from pathlib import Path
 from .wordlist_manager import wordlist_manager
 from .error_handler import handle_errors, ToolError, FileError
 from .logger import get_logger
+from ..config import Configuration
+from ..model.handshake import Handshake
+from ..tools.john import John
 
 logger = get_logger('multi_cracker')
 
@@ -150,7 +153,7 @@ class MultiWordlistCracker:
                 continue
             
             # Try cracking with available tools
-            for tool in ['aircrack-ng', 'hashcat']:
+            for tool in ['aircrack-ng', 'john', 'hashcat']:
                 if not self.available_tools.get(tool, False):
                     continue
                 
@@ -217,6 +220,8 @@ class MultiWordlistCracker:
                 return self._crack_with_aircrack(handshake_file, wordlist_file)
             elif tool == 'hashcat':
                 return self._crack_with_hashcat(handshake_file, wordlist_file)
+            elif tool == 'john':
+                return self._crack_with_john(handshake_file, wordlist_file)
             else:
                 return {'success': False, 'error': f'Unknown tool: {tool}'}
         except Exception as e:
@@ -363,6 +368,35 @@ class MultiWordlistCracker:
         except Exception as e:
             logger.error(f"Error converting to hashcat format: {e}")
             return None
+    
+    def _crack_with_john(self, handshake_file: str, wordlist_file: str) -> Dict[str, Any]:
+        """Crack using John the Ripper"""
+        try:
+            if not os.path.isfile(wordlist_file):
+                return {'success': False, 'error': f'Wordlist not found: {wordlist_file}'}
+
+            if not Configuration.initialized:
+                Configuration.initialize(load_interface=False)
+
+            handshake = Handshake(handshake_file)
+            original_wordlist = getattr(Configuration, 'wordlist', None)
+            try:
+                Configuration.wordlist = wordlist_file
+                password = John.crack_handshake(handshake, show_command=False, wordlist=wordlist_file)
+            finally:
+                Configuration.wordlist = original_wordlist
+
+            if password:
+                return {
+                    'success': True,
+                    'password': password,
+                    'tool': 'john'
+                }
+
+            return {'success': False, 'error': 'Password not found'}
+
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
     
     def get_available_strategies(self) -> Dict[str, Dict]:
         """Get available cracking strategies"""

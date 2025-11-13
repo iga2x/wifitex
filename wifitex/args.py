@@ -203,6 +203,14 @@ class Arguments(object):
             help=Color.s('File containing passwords for cracking (default: {G}%s{W})')
                 % self.config.wordlist)
 
+        wpa.add_argument('--cracker',
+            action='store',
+            dest='cracker',
+            choices=['auto', 'aircrack', 'aircrack-ng', 'hashcat', 'john', 'cowpatty'],
+            default='auto',
+            type=str,
+            help=self._verbose('Preferred cracking tool (default: {G}auto{W})'))
+
         wpa.add_argument('--wpadt',
             action='store',
             dest='wpa_deauth_timeout',

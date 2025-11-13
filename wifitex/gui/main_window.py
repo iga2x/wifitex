@@ -114,6 +114,14 @@ class WifitexMainWindow(QMainWindow):
         self.handshake_tab.log_message.connect(self.add_log)
         self.handshake_tab.status_message.connect(self.status_update.emit)
         self.handshake_tab.crack_saved.connect(self._on_handshake_cracked)
+
+        # Responsive layout state
+        self._current_layout_mode: Optional[str] = None
+        self._log_expanded: bool = True
+        app = QApplication.instance()
+        default_font = app.font() if isinstance(app, QApplication) else self.font()
+        self._default_font_point_size: float = default_font.pointSizeF() if default_font.pointSizeF() > 0 else float(default_font.pointSize() if default_font.pointSize() > 0 else 10)
+        self._default_font_pixel_size: Optional[int] = default_font.pixelSize() if default_font.pixelSize() > 0 else None
         
         # Data storage
         self.networks = []
@@ -131,6 +139,12 @@ class WifitexMainWindow(QMainWindow):
         # Initialize tool detection
         self.initialize_tool_detection()
         self._configure_handshake_directory()
+
+        # Monitor orientation changes for responsive layout
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            screen.orientationChanged.connect(self._on_screen_orientation_changed)
+        self.update_responsive_layout()
         
         # Check system requirements (deferred to avoid slow startup)
         
@@ -160,10 +174,10 @@ class WifitexMainWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
         
         # Create splitter for resizable panels
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.setOpaqueResize(False)
-        main_layout.addWidget(splitter)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setOpaqueResize(False)
+        main_layout.addWidget(self.main_splitter)
         
         # Left panel (main controls) as a tab set
         left_panel = self.create_left_panel()
@@ -173,21 +187,115 @@ class WifitexMainWindow(QMainWindow):
         self.main_tab_widget.addTab(left_panel, "Main Interface")
         self.main_tab_widget.addTab(self.handshake_tab, "Handshake Cracker")
 
-        right_panel = self.create_right_panel()
-        right_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        splitter.addWidget(self.main_tab_widget)
-        splitter.addWidget(right_panel)
+        self.right_panel = self.create_right_panel()
+        self.right_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.main_splitter.addWidget(self.main_tab_widget)
+        self.main_splitter.addWidget(self.right_panel)
         
         # Set splitter proportions
-        splitter.setSizes([800, 600])
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        self.main_splitter.setSizes([800, 600])
+        self.main_splitter.setStretchFactor(0, 3)
+        self.main_splitter.setStretchFactor(1, 2)
         
         # Create menu bar
         self.create_menu_bar()
         
         # Create status bar
         self.create_status_bar()
+
+    def layout_mode_for_width(self, width: int, dpi: float) -> str:
+        """Determine the appropriate layout mode based on width and DPI."""
+        scale = dpi / 96.0 if dpi > 0 else 1.0
+        normalized_width = width / scale if scale > 0 else width
+        if normalized_width >= 1150:
+            return "desktop"
+        if normalized_width >= 820:
+            return "tablet"
+        return "compact"
+
+    def set_base_font_scale(self, factor: float) -> None:
+        """Scale the base application font to improve readability on small displays."""
+        app = QApplication.instance()
+        if not isinstance(app, QApplication):
+            return
+        font = app.font()
+        if self._default_font_pixel_size is not None:
+            font.setPixelSize(int(self._default_font_pixel_size * factor))
+        else:
+            font.setPointSizeF(self._default_font_point_size * factor)
+        app.setFont(font)
+        # Adjust specific widgets that benefit from scaling
+        self.log_text.setFont(QFont(self.log_text.font().family(), max(8, int(self._default_font_point_size * factor))))
+        self.current_attack_info.setFont(QFont(self.current_attack_info.font().family(), max(8, int(self._default_font_point_size * factor))))
+        metrics = QFontMetrics(self.log_text.font())
+        header = self.networks_table.horizontalHeader()
+        if header is not None:
+            header.setDefaultSectionSize(max(60, metrics.horizontalAdvance("W" * 12)))
+            self.networks_table.resizeColumnsToContents()
+
+    def update_responsive_layout(self) -> None:
+        """Adjust layout and component visibility based on current window size."""
+        screen = QApplication.primaryScreen()
+        dpi = screen.logicalDotsPerInchX() if screen is not None else self.logicalDpiX()
+        mode = self.layout_mode_for_width(self.width(), dpi if dpi > 0 else 96.0)
+        if mode == self._current_layout_mode:
+            return
+        self._current_layout_mode = mode
+
+        if mode == "desktop":
+            self.main_splitter.setOrientation(Qt.Orientation.Horizontal)
+            self.main_splitter.setSizes([max(700, int(self.width() * 0.6)), max(400, int(self.width() * 0.4))])
+            self.right_panel.setVisible(True)
+            self.toggle_log_button.setVisible(False)
+            self._log_expanded = True
+            self.toggle_log_button.setText("Hide Details")
+            self.set_base_font_scale(1.0)
+        elif mode == "tablet":
+            self.main_splitter.setOrientation(Qt.Orientation.Vertical)
+            if self._log_expanded:
+                self.main_splitter.setSizes([max(500, int(self.height() * 0.55)), max(250, int(self.height() * 0.45))])
+            else:
+                self.main_splitter.setSizes([self.height(), 0])
+            self.right_panel.setVisible(self._log_expanded)
+            self.toggle_log_button.setVisible(True)
+            self.toggle_log_button.setText("Hide Details" if self._log_expanded else "Show Details")
+            self.set_base_font_scale(1.1)
+        else:
+            self.main_splitter.setOrientation(Qt.Orientation.Vertical)
+            if self._log_expanded:
+                self.main_splitter.setSizes([max(400, int(self.height() * 0.65)), max(180, int(self.height() * 0.35))])
+            else:
+                self.main_splitter.setSizes([self.height(), 0])
+            self.right_panel.setVisible(self._log_expanded)
+            self.toggle_log_button.setVisible(True)
+            self.toggle_log_button.setText("Hide Details" if self._log_expanded else "Show Details")
+            self.set_base_font_scale(1.22)
+
+    def _toggle_log_panel(self) -> None:
+        """Toggle visibility of the right-side detail panel."""
+        self._log_expanded = not self._log_expanded
+        if self._current_layout_mode in ("tablet", "compact"):
+            self.right_panel.setVisible(self._log_expanded)
+            if self._log_expanded:
+                self.toggle_log_button.setText("Hide Details")
+                top_size = max(300, int(self.height() * (0.6 if self._current_layout_mode == "compact" else 0.55)))
+                bottom_size = max(150, int(self.height() * (0.4 if self._current_layout_mode == "compact" else 0.45)))
+                self.main_splitter.setSizes([top_size, bottom_size])
+            else:
+                self.toggle_log_button.setText("Show Details")
+                self.main_splitter.setSizes([self.height(), 0])
+        else:
+            self.right_panel.setVisible(True)
+            self.toggle_log_button.setText("Hide Details")
+
+    def _on_screen_orientation_changed(self, _orientation) -> None:
+        """Handle screen orientation changes by re-evaluating the layout."""
+        self.update_responsive_layout()
+
+    def resizeEvent(self, event):
+        """Respond to window resize events by adjusting layout."""
+        super().resizeEvent(event)
+        self.update_responsive_layout()
         
     def center_window(self):
         """Center the window on the screen"""
@@ -350,6 +458,12 @@ class WifitexMainWindow(QMainWindow):
         """Create the right panel with logs and status"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
+
+        self.toggle_log_button = QPushButton("Hide Details")
+        self.toggle_log_button.setVisible(False)
+        self.toggle_log_button.setCheckable(False)
+        self.toggle_log_button.clicked.connect(self._toggle_log_panel)
+        layout.addWidget(self.toggle_log_button)
         
         # Create tab widget
         self.tab_widget = QTabWidget()

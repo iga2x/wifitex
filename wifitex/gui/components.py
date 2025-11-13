@@ -1526,7 +1526,7 @@ class HandshakeCrackerTab(QWidget):
 
         form.addWidget(QLabel("Tool:"), 3, 0)
         self.tool_combo = QComboBox()
-        self.tool_combo.addItems(["aircrack-ng", "hashcat"])
+        self.tool_combo.addItems(["aircrack-ng", "hashcat", "john"])
         form.addWidget(self.tool_combo, 3, 1)
 
         layout.addLayout(form)
@@ -1692,9 +1692,21 @@ class HandshakeCrackerTab(QWidget):
                 paths = [os.path.abspath(p) for p in defaults if isinstance(p, str)]
         if not paths:
             self.wordlist_summary.setText("No wordlists configured. Update them in Settings → Password Cracking.")
+            self.wordlist_summary.setToolTip("")
             return
-        display = "\n".join(os.path.basename(path) for path in paths)
-        self.wordlist_summary.setText(f"Using wordlists from Settings:\n{display}")
+
+        basenames = [os.path.basename(path) for path in paths]
+        max_visible = 4
+        if len(basenames) > max_visible:
+            preview = ", ".join(basenames[:max_visible])
+            summary = f"{preview}, … (+{len(basenames) - max_visible} more)"
+        else:
+            summary = ", ".join(basenames)
+
+        self.wordlist_summary.setText(
+            f"Using {len(basenames)} wordlists from Settings:\n{summary}"
+        )
+        self.wordlist_summary.setToolTip("\n".join(paths))
 
     def _show_details(self):
         item = self.handshake_list.currentItem()
@@ -1742,6 +1754,7 @@ class HandshakeCrackerTab(QWidget):
             self._append_output("")
 
         tool_choice = self.tool_combo.currentText()
+        tool_lower = tool_choice.lower()
         brute_options: Dict[str, Any] = {}
         if callable(self._get_bruteforce_options):
             try:
@@ -1750,15 +1763,15 @@ class HandshakeCrackerTab(QWidget):
                 self._emit_log(f"Failed to load brute-force settings: {exc}", level="warning", color="{O}")
                 brute_options = {}
 
-        if tool_choice.lower() != 'hashcat':
+        if tool_lower != 'hashcat':
             brute_options = {}
 
         brute_enabled = bool(brute_options.get('enabled'))
         brute_modes = brute_options.get('modes') or []
         modes_requiring_wordlist = {mode for mode in brute_modes if mode in {'0', '6', '7'}}
         requires_wordlist = (
-            tool_choice.lower() == 'aircrack-ng'
-            or (tool_choice.lower() == 'hashcat' and (not brute_enabled or bool(modes_requiring_wordlist)))
+            tool_lower in {'aircrack-ng', 'john'}
+            or (tool_lower == 'hashcat' and (not brute_enabled or bool(modes_requiring_wordlist)))
         )
 
         if not wordlists and requires_wordlist:
@@ -1778,7 +1791,7 @@ class HandshakeCrackerTab(QWidget):
             f"Starting {tool_choice} on {self._current_job.get('essid', 'unknown')} "
             f"with {len(wordlists)} wordlist(s)…"
         )
-        if brute_enabled and tool_choice.lower() == 'hashcat':
+        if brute_enabled and tool_lower == 'hashcat':
             start_msg += " Brute force enabled."
         self._append_output(f"{{O}}{start_msg}{{W}}")
         self._emit_log(start_msg, color="{O}")
@@ -4314,6 +4327,13 @@ class HandshakeCrackWorker(QThread):
                         task_label=label,
                         task_dict=task
                     )
+                elif task['type'] == 'john':
+                    result = self._run_john(
+                        handshake,
+                        task.get('wordlist'),
+                        source_label=task.get('source'),
+                        task_label=label
+                    )
                 else:
                     result = self._run_aircrack(
                         handshake,
@@ -4364,6 +4384,22 @@ class HandshakeCrackWorker(QThread):
                     'mask': None,
                     'source': base,
                     'label': f"aircrack-ng ({base})",
+                    'options': {},
+                })
+            return tasks
+
+        if tool_choice == 'john':
+            if not wordlists:
+                raise FileNotFoundError("John the Ripper requires at least one wordlist.")
+            for wordlist in wordlists:
+                base = os.path.basename(wordlist)
+                tasks.append({
+                    'type': 'john',
+                    'mode': None,
+                    'wordlist': wordlist,
+                    'mask': None,
+                    'source': base,
+                    'label': f"john ({base})",
                     'options': {},
                 })
             return tasks
@@ -4436,6 +4472,40 @@ class HandshakeCrackWorker(QThread):
             source_label=source_label or wordlist,
             task_label=task_label
         )
+
+    def _run_john(self, handshake, wordlist, source_label=None, task_label=None):
+        if Configuration is None:
+            raise RuntimeError("Configuration unavailable.")
+        if not wordlist:
+            raise ValueError("John the Ripper requires a wordlist.")
+
+        from ..tools.john import John  # Local import to avoid GUI startup penalty
+
+        data: Dict[str, Any] = {
+            'essid': handshake.essid,
+            'bssid': handshake.bssid,
+            'path': handshake.capfile,
+            'type': self.job.get('type', '4-WAY'),
+            'wordlist': source_label or os.path.basename(wordlist)
+        }
+        if task_label:
+            data['task'] = task_label
+
+        original_wordlist = getattr(Configuration, 'wordlist', None)
+        try:
+            Configuration.wordlist = wordlist
+            key = John.crack_handshake(handshake, show_command=False, wordlist=wordlist)
+        except Exception as exc:
+            raise RuntimeError(f"john failed: {exc}") from exc
+        finally:
+            Configuration.wordlist = original_wordlist
+
+        if key:
+            data['key'] = key
+            data['handshake_file'] = handshake.capfile
+            return True, data
+
+        return False, data
 
     def _run_hashcat(
             self,

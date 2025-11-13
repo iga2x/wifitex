@@ -78,6 +78,7 @@ class Configuration(object):
         # Cracking tool preferences
         cls.prefer_aircrack = True   # Prefer aircrack-ng for cracking by default
         cls.prefer_hashcat = False   # Hashcat is opt-in due to GPU requirement
+        cls.preferred_cracker = 'auto'  # Auto-select best cracker unless overridden
         cls.multi_wordlist = False   # Use a single primary wordlist by default
         cls.custom_wordlist_paths = []  # Additional wordlists provided by the user
         cls.use_brute_force = False  # Brute force is disabled by default
@@ -294,6 +295,15 @@ class Configuration(object):
         if args.wpa_strip_handshake:
             cls.wpa_strip_handshake = True
             Color.pl('{+} {C}option:{W} will {G}strip{W} non-handshake packets')
+
+        preferred_cracker = getattr(args, 'cracker', None)
+        if preferred_cracker is not None:
+            normalized_cracker = preferred_cracker
+            if preferred_cracker == 'aircrack-ng':
+                normalized_cracker = 'aircrack'
+            cls.preferred_cracker = normalized_cracker
+            if preferred_cracker != 'auto':
+                Color.pl('{+} {C}option:{W} preferring {G}%s{W} for WPA cracking' % preferred_cracker)
 
     @classmethod
     def parse_wps_args(cls, args):

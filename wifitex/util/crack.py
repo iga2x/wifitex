@@ -165,6 +165,8 @@ class CrackHelper:
 
         hashcat_available = 'hashcat' in available_tools
         aircrack_available = 'aircrack' in available_tools
+        john_available = 'john' in available_tools
+        cowpatty_available = 'cowpatty' in available_tools
 
         gpu_available = False
         gpu_error = None
@@ -179,7 +181,13 @@ class CrackHelper:
             except Exception as exc:
                 gpu_error = str(exc)
 
+        preferred_cracker = getattr(Configuration, 'preferred_cracker', 'auto') or 'auto'
+        preferred_cracker = preferred_cracker.lower()
+        tool_name = None
+
         if all_pmkid:
+            if preferred_cracker not in ('auto', 'hashcat'):
+                Color.pl('{!} {O}Note:{W} PMKID hashes require {C}hashcat{W}; ignoring preferred cracker "{G}%s{W}".' % preferred_cracker)
             Color.pl('{!} {O}Note: PMKID hashes can only be cracked using {C}hashcat{W}')
             if not hashcat_available:
                 Color.pl('{!} {R}Hashcat is unavailable; cannot crack PMKID hashes.{W}')
@@ -190,27 +198,65 @@ class CrackHelper:
                 Color.pl('{!} {O}Hashcat did not detect a GPU. Continuing in CPU mode; cracking will be slower.{W}')
             tool_name = 'hashcat'
         else:
-            if hashcat_available and gpu_available:
-                Color.pl('{+} {C}hashcat{W} selected (GPU detected: {G}%s{W})' % gpu_name)
-                tool_name = 'hashcat'
-            elif aircrack_available:
-                if hashcat_available:
+            if preferred_cracker != 'auto':
+                if preferred_cracker == 'hashcat':
+                    if hashcat_available:
+                        tool_name = 'hashcat'
+                        if gpu_error:
+                            Color.pl('{!} {O}Hashcat GPU detection issue: {R}%s{W}' % gpu_error)
+                        elif not gpu_available:
+                            Color.pl('{!} {O}Hashcat did not detect a GPU. Continuing in CPU mode; cracking may be slow.{W}')
+                    else:
+                        Color.pl('{!} {O}Preferred cracker {C}hashcat{W} not available; falling back to auto selection.')
+                elif preferred_cracker == 'john':
+                    if john_available:
+                        Color.pl('{+} {C}john{W} selected (user preference).')
+                        tool_name = 'john'
+                    else:
+                        Color.pl('{!} {O}Preferred cracker {C}john{W} not available; falling back to auto selection.')
+                elif preferred_cracker in ('aircrack', 'aircrack-ng'):
+                    if aircrack_available:
+                        Color.pl('{+} {C}aircrack-ng{W} selected (user preference).')
+                        tool_name = 'aircrack'
+                    else:
+                        Color.pl('{!} {O}Preferred cracker {C}aircrack-ng{W} not available; falling back to auto selection.')
+                elif preferred_cracker == 'cowpatty':
+                    if cowpatty_available:
+                        Color.pl('{+} {C}cowpatty{W} selected (user preference).')
+                        tool_name = 'cowpatty'
+                    else:
+                        Color.pl('{!} {O}Preferred cracker {C}cowpatty{W} not available; falling back to auto selection.')
+                else:
+                    Color.pl('{!} {O}Unknown preferred cracker "{G}%s{O}"; using auto selection instead.{W}' % preferred_cracker)
+
+            if tool_name is None:
+                if hashcat_available and gpu_available:
+                    Color.pl('{+} {C}hashcat{W} selected (GPU detected: {G}%s{W})' % gpu_name)
+                    tool_name = 'hashcat'
+                elif john_available:
+                    Color.pl('{+} {C}john{W} selected (hashcat GPU unavailable).')
+                    tool_name = 'john'
+                elif aircrack_available:
+                    if hashcat_available:
+                        if gpu_error:
+                            Color.pl('{!} {O}Hashcat GPU detection issue: {R}%s{W}' % gpu_error)
+                        else:
+                            Color.pl('{!} {O}No GPU detected by hashcat; using {C}aircrack-ng{W} instead.')
+                    else:
+                        Color.pl('{+} {C}aircrack-ng{W} selected (hashcat unavailable).')
+                    tool_name = 'aircrack'
+                elif hashcat_available:
                     if gpu_error:
                         Color.pl('{!} {O}Hashcat GPU detection issue: {R}%s{W}' % gpu_error)
                     else:
-                        Color.pl('{!} {O}No GPU detected by hashcat; using {C}aircrack-ng{W} instead.')
+                        Color.pl('{!} {O}Hashcat did not detect a GPU. Continuing in CPU mode; cracking may be slow.{W}')
+                    tool_name = 'hashcat'
+                elif cowpatty_available:
+                    Color.pl('{+} {C}cowpatty{W} selected (only available cracker).')
+                    tool_name = 'cowpatty'
                 else:
-                    Color.pl('{+} {C}aircrack-ng{W} selected (hashcat unavailable or no GPU detected).')
-                tool_name = 'aircrack'
-            elif hashcat_available:
-                if gpu_error:
-                    Color.pl('{!} {O}Hashcat GPU detection issue: {R}%s{W}' % gpu_error)
-                else:
-                    Color.pl('{!} {O}Hashcat did not detect a GPU. Continuing in CPU mode; cracking may be slow.{W}')
-                tool_name = 'hashcat'
-            else:
-                Color.pl('{!} {R}No supported cracking tools are available.{W}')
-                return
+                    Color.pl('{!} {R}No supported cracking tools are available.{W}')
+                    return
 
         try:
             for hs in hs_to_crack:
